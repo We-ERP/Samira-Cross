@@ -8,17 +8,17 @@
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
     <link rel="stylesheet" href="style.css">
 
-    <!-- Read Excel files -->
+    <!-- قراءة Excel -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <!-- Write colored Excel output -->
+    <!-- تصدير Excel مع ألوان -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
-    <!-- File download -->
+    <!-- حفظ الملفات -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 </head>
 <body>
 <div class="app">
 
-    <!-- ── HEADER ── -->
+    <!-- HEADER -->
     <header class="hdr">
         <div class="hdr-left">
             <h1>Samira Cross-Match</h1>
@@ -27,7 +27,7 @@
         <span class="hdr-badge">v2.0</span>
     </header>
 
-    <!-- ── UPLOAD ZONE ── -->
+    <!-- UPLOAD ZONE -->
     <div class="upload-grid">
         <div class="drop-zone dz-ftth" id="dz-ftth">
             <input type="file" id="file-ftth" accept=".xlsx,.xls,.csv" class="dz-input">
@@ -52,15 +52,13 @@
         </div>
     </div>
 
-    <!-- ── ACTION BUTTONS ── -->
+    <!-- ACTIONS -->
     <div class="actions">
-        <button class="btn btn-run"     id="btn-run">▶ Run Cross-Match</button>
-        <button class="btn btn-refresh" id="btn-refresh" style="display:none">🔄 Refresh</button>
-        <button class="btn btn-export"  id="btn-export"  style="display:none">⬇ Export to Excel</button>
-        <button class="btn btn-reset"   id="btn-reset">✕ Reset</button>
+        <button class="btn btn-run" id="btn-run">▶ Run Cross-Match</button>
+        <button class="btn btn-export" id="btn-export" style="display:none">⬇ Export to Excel</button>
     </div>
 
-    <!-- ── STATS DASHBOARD ── -->
+    <!-- STATS DASHBOARD -->
     <div class="stats-grid" id="stats-grid" style="display:none">
         <div class="stat-card total">
             <div class="stat-num" id="s-total">0</div>
@@ -83,7 +81,7 @@
         </div>
     </div>
 
-    <!-- ── FILTER BAR ── -->
+    <!-- FILTER BAR -->
     <div class="filter-bar" id="filter-bar" style="display:none">
         <div class="search-wrap">
             <span class="search-icon">🔍</span>
@@ -97,34 +95,30 @@
         </div>
     </div>
 
-    <!-- ── RESULTS TABLE ── -->
-    <div class="table-wrap">
+    <!-- RESULTS TABLE -->
+    <div class="table-wrap" id="table-wrap">
         <div class="empty-state" id="empty-state">
             <div class="big-icon">📊</div>
             <p>Upload your three files and hit <strong>Run Cross-Match</strong> to see results here.</p>
         </div>
         <div class="table-inner" id="table-inner" style="display:none">
-            <table>
+            <table id="result-table">
                 <thead id="tbl-head"></thead>
                 <tbody id="tbl-body"></tbody>
             </table>
         </div>
         <div class="table-footer" id="tbl-footer" style="display:none">
             <span id="footer-count"></span>
-            <span id="footer-note"></span>
+            <span id="footer-note" style="font-size:12px"></span>
         </div>
     </div>
 
 </div>
 
-<!-- ── LOADING OVERLAY ── -->
+<!-- LOADING OVERLAY -->
 <div class="overlay" id="overlay">
     <div class="spinner"></div>
     <div class="overlay-txt" id="overlay-txt">Processing…</div>
-    <div class="progress-wrap">
-        <div class="progress-bar" id="progress-bar"></div>
-    </div>
-    <div class="progress-pct" id="progress-pct">0%</div>
 </div>
 
 <script src="script.js"></script>

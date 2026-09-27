@@ -1,22 +1,21 @@
-// ── STATE ─────────────────────────────────────────────
+// ── DATA ─────────────────────────────────────────────
 let ftthData = null, dslData = null, irData = null;
 let finalData = [], filteredData = [], headers = [];
 let sortCol = null, sortDir = 1;
 let activeFilter = 'all', searchVal = '';
 
-const PREVIEW  = 500;   // max rows shown in browser
-const CHUNK_SZ = 2000;  // rows per async chunk during cross-match
+const PREVIEW = 500;
 
-// ── DRAG & DROP SETUP ─────────────────────────────────
+// ── FILE LOADING ──────────────────────────────────────
 function setupDrop(dzId, inputId, type) {
-    const dz  = document.getElementById(dzId);
+    const dz = document.getElementById(dzId);
     const inp = document.getElementById(inputId);
 
     inp.addEventListener('change', e => {
         if (e.target.files[0]) loadFile(e.target.files[0], type);
     });
-    dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('drag-over'); });
-    dz.addEventListener('dragleave', ()  => dz.classList.remove('drag-over'));
+    dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+    dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
     dz.addEventListener('drop', e => {
         e.preventDefault();
         dz.classList.remove('drag-over');
@@ -28,95 +27,48 @@ setupDrop('dz-ftth', 'file-ftth', 'ftth');
 setupDrop('dz-dsl',  'file-dsl',  'dsl');
 setupDrop('dz-ir',   'file-ir',   'ir');
 
-// ── FILE LOADING ──────────────────────────────────────
 function loadFile(file, type) {
-    showOverlay(`Reading ${type.toUpperCase()} file…`, 0);
-
+    showOverlay(`Loading ${type.toUpperCase()}…`);
     const reader = new FileReader();
-
-    // Real progress for large files (like 70MB FTTH)
-    reader.onprogress = e => {
-        if (e.lengthComputable) {
-            const pct = Math.round((e.loaded / e.total) * 55); // 0–55%
-            updateProgress(pct, `Loading ${type.toUpperCase()}… ${formatBytes(e.loaded)} / ${formatBytes(e.total)}`);
-        }
-    };
-
     reader.onload = e => {
-        updateProgress(60, `Parsing ${type.toUpperCase()} (this may take a moment for large files)…`);
+        const wb   = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+        const ws   = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
-        // Yield so the UI can repaint before XLSX.read blocks the thread
-        setTimeout(() => {
-            try {
-                const wb   = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
-                const ws   = wb.Sheets[wb.SheetNames[0]];
+        const badge = document.getElementById(`${type}-status`);
+        badge.innerHTML = `<span class="dot"></span> ${json.length.toLocaleString()} rows`;
+        badge.classList.add('ok');
+        document.getElementById(`dz-${type}`).classList.add('loaded');
 
-                updateProgress(85, `Converting ${type.toUpperCase()} to rows…`);
-
-                setTimeout(() => {
-                    const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
-
-                    const badge = document.getElementById(`${type}-status`);
-                    badge.innerHTML = `<span class="dot"></span> ${json.length.toLocaleString()} rows`;
-                    badge.classList.add('ok');
-                    document.getElementById(`dz-${type}`).classList.add('loaded');
-
-                    if (type === 'ftth') ftthData = json;
-                    if (type === 'dsl')  dslData  = json;
-                    if (type === 'ir')   irData   = json;
-
-                    updateProgress(100, 'Done!');
-                    setTimeout(hideOverlay, 400);
-                }, 30);
-
-            } catch (err) {
-                hideOverlay();
-                alert(`Error reading file: ${err.message}`);
-            }
-        }, 50);
+        if (type === 'ftth') ftthData = json;
+        if (type === 'dsl')  dslData  = json;
+        if (type === 'ir')   irData   = json;
+        hideOverlay();
     };
-
-    reader.onerror = () => { hideOverlay(); alert('Failed to read file.'); };
     reader.readAsArrayBuffer(file);
 }
 
-// ── CLEAN SERVICE NUMBER ──────────────────────────────
+// ── CLEAN ─────────────────────────────────────────────
 function clean(val) {
     if (!val) return '';
     return String(val).toUpperCase().replace(/FBB/g, '').replace(/FV/g, '').trim();
 }
 
-// ── RUN CROSS-MATCH ───────────────────────────────────
-document.getElementById('btn-run').addEventListener('click', runMatch);
-document.getElementById('btn-refresh').addEventListener('click', runMatch);
-
-async function runMatch() {
+// ── RUN ───────────────────────────────────────────────
+document.getElementById('btn-run').addEventListener('click', () => {
     if (!ftthData || !dslData || !irData) {
         alert('Please upload all 3 sheets first.');
         return;
     }
+    showOverlay('Running cross-match…');
 
-    setBtnsDisabled(true);
-    showOverlay('Building lookup tables…', 0);
-    await tick();
+    setTimeout(() => {
+        const dslMap  = new Map();
+        const ftthMap = new Map();
+        dslData.forEach(r  => { const n = clean(r['Service Number']); if (n) dslMap.set(n, r); });
+        ftthData.forEach(r => { const n = clean(r['Service Number']); if (n) ftthMap.set(n, r); });
 
-    // Build O(1) Maps
-    const dslMap  = new Map();
-    const ftthMap = new Map();
-    dslData.forEach(r  => { const n = clean(r['Service Number']); if (n) dslMap.set(n, r); });
-    ftthData.forEach(r => { const n = clean(r['Service Number']); if (n) ftthMap.set(n, r); });
-
-    updateProgress(5, 'Starting cross-match…');
-    await tick();
-
-    finalData = [];
-    const total = irData.length;
-
-    // Process in chunks so progress bar can update
-    for (let i = 0; i < total; i += CHUNK_SZ) {
-        const chunk = irData.slice(i, i + CHUNK_SZ);
-
-        chunk.forEach(irRow => {
+        finalData = irData.map(irRow => {
             const row = { ...irRow };
             const num = clean(irRow['dsl_number']);
             const cat = String(irRow['case_sub_type'] || '').trim().toLowerCase();
@@ -143,71 +95,21 @@ async function runMatch() {
                 row['FTTH Match'] = 'Not avail';
             }
 
-            finalData.push(row);
+            return row;
         });
 
-        const pct = 5 + Math.round(((i + CHUNK_SZ) / total) * 90);
-        updateProgress(Math.min(pct, 95), `Matching row ${Math.min(i + CHUNK_SZ, total).toLocaleString()} of ${total.toLocaleString()}…`);
-        await tick();
-    }
+        headers = finalData.length ? Object.keys(finalData[0]) : [];
+        updateStats();
+        applyFilter();
 
-    updateProgress(100, 'Rendering results…');
-    await tick();
-
-    headers = finalData.length ? Object.keys(finalData[0]) : [];
-    updateStats();
-    applyFilter();
-
-    // Show UI sections
-    document.getElementById('btn-export').style.display  = 'inline-block';
-    document.getElementById('btn-refresh').style.display = 'inline-block';
-    document.getElementById('stats-grid').style.display  = 'grid';
-    document.getElementById('filter-bar').style.display  = 'flex';
-    document.getElementById('empty-state').style.display = 'none';
-    document.getElementById('table-inner').style.display = 'block';
-    document.getElementById('tbl-footer').style.display  = 'flex';
-
-    setBtnsDisabled(false);
-    setTimeout(hideOverlay, 300);
-}
-
-// ── RESET ─────────────────────────────────────────────
-document.getElementById('btn-reset').addEventListener('click', () => {
-    if (!confirm('Reset everything? All uploaded files and results will be cleared.')) return;
-
-    // Clear data
-    ftthData = dslData = irData = null;
-    finalData = []; filteredData = []; headers = [];
-    sortCol = null; sortDir = 1;
-    activeFilter = 'all'; searchVal = '';
-
-    // Reset file inputs & badges
-    ['ftth', 'dsl', 'ir'].forEach(t => {
-        document.getElementById(`file-${t}`).value = '';
-        const badge = document.getElementById(`${t}-status`);
-        badge.innerHTML = `<span class="dot"></span> Waiting`;
-        badge.classList.remove('ok');
-        const dz = document.getElementById(`dz-${t}`);
-        dz.classList.remove('loaded');
-        dz.classList.add('reset-anim');
-        setTimeout(() => dz.classList.remove('reset-anim'), 500);
-    });
-
-    // Reset search
-    document.getElementById('search-input').value = '';
-    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
-    document.querySelector('.chip.all').classList.add('active');
-
-    // Hide results
-    document.getElementById('btn-export').style.display  = 'none';
-    document.getElementById('btn-refresh').style.display = 'none';
-    document.getElementById('stats-grid').style.display  = 'none';
-    document.getElementById('filter-bar').style.display  = 'none';
-    document.getElementById('empty-state').style.display = 'block';
-    document.getElementById('table-inner').style.display = 'none';
-    document.getElementById('tbl-footer').style.display  = 'none';
-    document.getElementById('tbl-head').innerHTML = '';
-    document.getElementById('tbl-body').innerHTML = '';
+        document.getElementById('btn-export').style.display = 'inline-block';
+        document.getElementById('stats-grid').style.display = 'grid';
+        document.getElementById('filter-bar').style.display = 'flex';
+        document.getElementById('empty-state').style.display = 'none';
+        document.getElementById('table-inner').style.display = 'block';
+        document.getElementById('tbl-footer').style.display  = 'flex';
+        hideOverlay();
+    }, 50);
 });
 
 // ── STATS ─────────────────────────────────────────────
@@ -244,9 +146,9 @@ document.getElementById('search-input').addEventListener('input', e => {
 
 function applyFilter() {
     filteredData = finalData.filter(row => {
-        if (activeFilter === 'same' && row['FTTH Match'] !== 'The same')  return false;
-        if (activeFilter === 'chg'  && row['FTTH Match'] !== 'Changed')   return false;
-        if (activeFilter === 'na'   && row['FTTH Match'] !== 'Not avail') return false;
+        if (activeFilter === 'same' && row['FTTH Match'] !== 'The same')   return false;
+        if (activeFilter === 'chg'  && row['FTTH Match'] !== 'Changed')    return false;
+        if (activeFilter === 'na'   && row['FTTH Match'] !== 'Not avail')  return false;
         if (searchVal) {
             return Object.values(row).some(v => String(v).toLowerCase().includes(searchVal));
         }
@@ -260,31 +162,25 @@ function applyFilter() {
 function doSort(toggle = true) {
     if (toggle) sortDir *= -1;
     const key = headers[sortCol];
-    filteredData.sort((a, b) =>
-        String(a[key] || '').localeCompare(String(b[key] || '')) * sortDir
-    );
+    filteredData.sort((a, b) => String(a[key] || '').localeCompare(String(b[key] || '')) * sortDir);
 }
 
-// ── RENDER TABLE ──────────────────────────────────────
+// ── RENDER ────────────────────────────────────────────
 function renderTable() {
     const thead = document.getElementById('tbl-head');
     const tbody = document.getElementById('tbl-body');
 
-    // Header
+    // Header row
     thead.innerHTML = '<tr>' + headers.map((h, i) => {
         const cls = sortCol === i ? (sortDir === 1 ? 'sort-asc' : 'sort-desc') : '';
-        return `<th class="${cls}" data-i="${i}">${h}<span class="sa"></span></th>`;
+        return `<th class="${cls}" data-i="${i}">${h} <span class="sort-arrow"></span></th>`;
     }).join('') + '</tr>';
 
     thead.querySelectorAll('th').forEach(th => {
-        th.addEventListener('click', () => {
-            sortCol = +th.dataset.i;
-            doSort(true);
-            renderTable();
-        });
+        th.addEventListener('click', () => { sortCol = +th.dataset.i; doSort(true); renderTable(); });
     });
 
-    // Rows
+    // Data rows (preview only)
     const slice = filteredData.slice(0, PREVIEW);
     const frag  = document.createDocumentFragment();
 
@@ -312,30 +208,20 @@ function renderTable() {
     document.getElementById('footer-count').textContent =
         `Showing ${Math.min(slice.length, PREVIEW).toLocaleString()} of ${filteredData.length.toLocaleString()} rows`;
     document.getElementById('footer-note').textContent =
-        filteredData.length > PREVIEW
-            ? `Preview capped at ${PREVIEW} rows — export Excel for full data`
-            : '';
+        filteredData.length > PREVIEW ? `Preview limited to ${PREVIEW} rows — export for full data` : '';
 }
 
 // ── EXPORT ────────────────────────────────────────────
 document.getElementById('btn-export').addEventListener('click', async () => {
     if (!finalData.length) return;
-    setBtnsDisabled(true);
-    showOverlay('Building Excel file…', 10);
-
+    showOverlay('Generating Excel file…');
     try {
         const wb = new ExcelJS.Workbook();
         const ws = wb.addWorksheet('Cross-Match Report');
         ws.columns = headers.map(h => ({ header: h, key: h, width: 22 }));
-
-        updateProgress(30, 'Writing rows…');
-        await tick();
         ws.addRows(finalData);
 
-        updateProgress(60, 'Applying styles…');
-        await tick();
-
-        // Header row
+        // Header row style
         ws.getRow(1).eachCell(cell => {
             cell.font      = { bold: true, color: { argb: 'FFFFFFFF' } };
             cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A192F' } };
@@ -350,58 +236,24 @@ document.getElementById('btn-export').addEventListener('click', async () => {
             [ftthCol, dslCol].forEach(ci => {
                 if (!ci) return;
                 const cell = row.getCell(ci);
-                if      (cell.value === 'The same')  { cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFD1FAE5' } }; cell.font = { color:{ argb:'FF065F46' }, bold:true }; }
-                else if (cell.value === 'Changed')   { cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF3C7' } }; cell.font = { color:{ argb:'FF92400E' }, bold:true }; }
-                else if (cell.value === 'Not avail') { cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEE2E2' } }; cell.font = { color:{ argb:'FF991B1B' }, bold:true }; }
+                if      (cell.value === 'The same')  { cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFD1FAE5'} }; cell.font = { color:{argb:'FF065F46'}, bold:true }; }
+                else if (cell.value === 'Changed')   { cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFFEF3C7'} }; cell.font = { color:{argb:'FF92400E'}, bold:true }; }
+                else if (cell.value === 'Not avail') { cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFFEE2E2'} }; cell.font = { color:{argb:'FF991B1B'}, bold:true }; }
             });
         });
 
-        updateProgress(90, 'Generating file…');
-        await tick();
-
         const buf = await wb.xlsx.writeBuffer();
         saveAs(new Blob([buf]), 'Samira_CrossMatch_Output.xlsx');
-        updateProgress(100, 'Done!');
-        setTimeout(hideOverlay, 400);
-    } catch (err) {
-        hideOverlay();
-        alert('Export failed: ' + err.message);
     } finally {
-        setBtnsDisabled(false);
+        hideOverlay();
     }
 });
 
 // ── OVERLAY HELPERS ───────────────────────────────────
-function showOverlay(msg, pct = 0) {
+function showOverlay(msg) {
     document.getElementById('overlay-txt').textContent = msg;
-    document.getElementById('progress-bar').style.width = pct + '%';
-    document.getElementById('progress-pct').textContent = pct + '%';
     document.getElementById('overlay').classList.add('show');
 }
-
-function updateProgress(pct, msg) {
-    if (msg) document.getElementById('overlay-txt').textContent = msg;
-    document.getElementById('progress-bar').style.width = pct + '%';
-    document.getElementById('progress-pct').textContent = pct + '%';
-}
-
 function hideOverlay() {
     document.getElementById('overlay').classList.remove('show');
-}
-
-function setBtnsDisabled(state) {
-    ['btn-run', 'btn-refresh', 'btn-export', 'btn-reset'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.disabled = state;
-    });
-}
-
-// ── UTILS ─────────────────────────────────────────────
-function tick() {
-    return new Promise(r => setTimeout(r, 0));
-}
-
-function formatBytes(bytes) {
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
