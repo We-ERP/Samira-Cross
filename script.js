@@ -1,194 +1,407 @@
-// متغيرات تخزين الداتا
-let ftthData = null;
-let dslData = null;
-let irData = null;
-let finalCrossMatchData = [];
+// ── STATE ─────────────────────────────────────────────
+let ftthData = null, dslData = null, irData = null;
+let finalData = [], filteredData = [], headers = [];
+let sortCol = null, sortDir = 1;
+let activeFilter = 'all', searchVal = '';
 
-// تعريف الـ Event Listeners للملفات الثلاثة
-document.getElementById('file-ftth').addEventListener('change', (e) => loadFile(e, 'ftth'));
-document.getElementById('file-dsl').addEventListener('change', (e) => loadFile(e, 'dsl'));
-document.getElementById('file-ir').addEventListener('change', (e) => loadFile(e, 'ir'));
+const PREVIEW  = 500;   // max rows shown in browser
+const CHUNK_SZ = 2000;  // rows per async chunk during cross-match
 
-function loadFile(event, type) {
-    const file = event.target.files[0];
-    if (!file) return;
-    
+// ── DRAG & DROP SETUP ─────────────────────────────────
+function setupDrop(dzId, inputId, type) {
+    const dz  = document.getElementById(dzId);
+    const inp = document.getElementById(inputId);
+
+    inp.addEventListener('change', e => {
+        if (e.target.files[0]) loadFile(e.target.files[0], type);
+    });
+    dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('drag-over'); });
+    dz.addEventListener('dragleave', ()  => dz.classList.remove('drag-over'));
+    dz.addEventListener('drop', e => {
+        e.preventDefault();
+        dz.classList.remove('drag-over');
+        const f = e.dataTransfer.files[0];
+        if (f) { inp.files = e.dataTransfer.files; loadFile(f, type); }
+    });
+}
+setupDrop('dz-ftth', 'file-ftth', 'ftth');
+setupDrop('dz-dsl',  'file-dsl',  'dsl');
+setupDrop('dz-ir',   'file-ir',   'ir');
+
+// ── FILE LOADING ──────────────────────────────────────
+function loadFile(file, type) {
+    showOverlay(`Reading ${type.toUpperCase()} file…`, 0);
+
     const reader = new FileReader();
-    reader.onload = (e) => {
-        const data = new Uint8Array(e.target.result);
-        const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        const jsonData = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
-        
-        const statusBadge = document.getElementById(`${type}-status`);
-        statusBadge.innerText = `Loaded (${jsonData.length} rows)`;
-        statusBadge.classList.add('loaded');
 
-        if (type === 'ftth') ftthData = jsonData;
-        if (type === 'dsl') dslData = jsonData;
-        if (type === 'ir') irData = jsonData;
+    // Real progress for large files (like 70MB FTTH)
+    reader.onprogress = e => {
+        if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 55); // 0–55%
+            updateProgress(pct, `Loading ${type.toUpperCase()}… ${formatBytes(e.loaded)} / ${formatBytes(e.total)}`);
+        }
     };
+
+    reader.onload = e => {
+        updateProgress(60, `Parsing ${type.toUpperCase()} (this may take a moment for large files)…`);
+
+        // Yield so the UI can repaint before XLSX.read blocks the thread
+        setTimeout(() => {
+            try {
+                const wb   = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                const ws   = wb.Sheets[wb.SheetNames[0]];
+
+                updateProgress(85, `Converting ${type.toUpperCase()} to rows…`);
+
+                setTimeout(() => {
+                    const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+                    const badge = document.getElementById(`${type}-status`);
+                    badge.innerHTML = `<span class="dot"></span> ${json.length.toLocaleString()} rows`;
+                    badge.classList.add('ok');
+                    document.getElementById(`dz-${type}`).classList.add('loaded');
+
+                    if (type === 'ftth') ftthData = json;
+                    if (type === 'dsl')  dslData  = json;
+                    if (type === 'ir')   irData   = json;
+
+                    updateProgress(100, 'Done!');
+                    setTimeout(hideOverlay, 400);
+                }, 30);
+
+            } catch (err) {
+                hideOverlay();
+                alert(`Error reading file: ${err.message}`);
+            }
+        }, 50);
+    };
+
+    reader.onerror = () => { hideOverlay(); alert('Failed to read file.'); };
     reader.readAsArrayBuffer(file);
 }
 
-// دالة لتنظيف السيرفيس نمبر من FBB و FV ومسافات الفراغ
-function cleanServiceNumber(val) {
-    if (!val) return "";
-    let str = String(val).toUpperCase();
-    return str.replace(/FBB/g, '').replace(/FV/g, '').trim();
+// ── CLEAN SERVICE NUMBER ──────────────────────────────
+function clean(val) {
+    if (!val) return '';
+    return String(val).toUpperCase().replace(/FBB/g, '').replace(/FV/g, '').trim();
 }
 
-// دالة المطابقة
-document.getElementById('btn-run').addEventListener('click', () => {
+// ── RUN CROSS-MATCH ───────────────────────────────────
+document.getElementById('btn-run').addEventListener('click', runMatch);
+document.getElementById('btn-refresh').addEventListener('click', runMatch);
+
+async function runMatch() {
     if (!ftthData || !dslData || !irData) {
-        alert("Please upload all 3 sheets (FTTH, DSL, IR) before running.");
+        alert('Please upload all 3 sheets first.');
         return;
     }
 
-    // بناء Maps لسرعة البحث الخارقة (O(1) Lookup) بدلاً من اللف داخل اللف
-    const dslMap = new Map();
-    dslData.forEach(row => {
-        const num = cleanServiceNumber(row['Service Number']);
-        if (num) dslMap.set(num, row);
-    });
+    setBtnsDisabled(true);
+    showOverlay('Building lookup tables…', 0);
+    await tick();
 
+    // Build O(1) Maps
+    const dslMap  = new Map();
     const ftthMap = new Map();
-    ftthData.forEach(row => {
-        const num = cleanServiceNumber(row['Service Number']);
-        if (num) ftthMap.set(num, row);
+    dslData.forEach(r  => { const n = clean(r['Service Number']); if (n) dslMap.set(n, r); });
+    ftthData.forEach(r => { const n = clean(r['Service Number']); if (n) ftthMap.set(n, r); });
+
+    updateProgress(5, 'Starting cross-match…');
+    await tick();
+
+    finalData = [];
+    const total = irData.length;
+
+    // Process in chunks so progress bar can update
+    for (let i = 0; i < total; i += CHUNK_SZ) {
+        const chunk = irData.slice(i, i + CHUNK_SZ);
+
+        chunk.forEach(irRow => {
+            const row = { ...irRow };
+            const num = clean(irRow['dsl_number']);
+            const cat = String(irRow['case_sub_type'] || '').trim().toLowerCase();
+
+            // DSL match
+            const dsl = dslMap.get(num);
+            if (dsl) {
+                const s = String(dsl['Service Name'] || '').trim();
+                row['Current Activity DSL'] = s;
+                row['DSL Match'] = (cat === s.toLowerCase()) ? 'The same' : 'Changed';
+            } else {
+                row['Current Activity DSL'] = 'Not avail';
+                row['DSL Match'] = 'Not avail';
+            }
+
+            // FTTH match
+            const ftth = ftthMap.get(num);
+            if (ftth) {
+                const s = String(ftth['Service Name'] || '').trim();
+                row['Current Activity FTTH'] = s;
+                row['FTTH Match'] = (cat === s.toLowerCase()) ? 'The same' : 'Changed';
+            } else {
+                row['Current Activity FTTH'] = 'Not avail';
+                row['FTTH Match'] = 'Not avail';
+            }
+
+            finalData.push(row);
+        });
+
+        const pct = 5 + Math.round(((i + CHUNK_SZ) / total) * 90);
+        updateProgress(Math.min(pct, 95), `Matching row ${Math.min(i + CHUNK_SZ, total).toLocaleString()} of ${total.toLocaleString()}…`);
+        await tick();
+    }
+
+    updateProgress(100, 'Rendering results…');
+    await tick();
+
+    headers = finalData.length ? Object.keys(finalData[0]) : [];
+    updateStats();
+    applyFilter();
+
+    // Show UI sections
+    document.getElementById('btn-export').style.display  = 'inline-block';
+    document.getElementById('btn-refresh').style.display = 'inline-block';
+    document.getElementById('stats-grid').style.display  = 'grid';
+    document.getElementById('filter-bar').style.display  = 'flex';
+    document.getElementById('empty-state').style.display = 'none';
+    document.getElementById('table-inner').style.display = 'block';
+    document.getElementById('tbl-footer').style.display  = 'flex';
+
+    setBtnsDisabled(false);
+    setTimeout(hideOverlay, 300);
+}
+
+// ── RESET ─────────────────────────────────────────────
+document.getElementById('btn-reset').addEventListener('click', () => {
+    if (!confirm('Reset everything? All uploaded files and results will be cleared.')) return;
+
+    // Clear data
+    ftthData = dslData = irData = null;
+    finalData = []; filteredData = []; headers = [];
+    sortCol = null; sortDir = 1;
+    activeFilter = 'all'; searchVal = '';
+
+    // Reset file inputs & badges
+    ['ftth', 'dsl', 'ir'].forEach(t => {
+        document.getElementById(`file-${t}`).value = '';
+        const badge = document.getElementById(`${t}-status`);
+        badge.innerHTML = `<span class="dot"></span> Waiting`;
+        badge.classList.remove('ok');
+        const dz = document.getElementById(`dz-${t}`);
+        dz.classList.remove('loaded');
+        dz.classList.add('reset-anim');
+        setTimeout(() => dz.classList.remove('reset-anim'), 500);
     });
 
-    finalCrossMatchData = [];
+    // Reset search
+    document.getElementById('search-input').value = '';
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    document.querySelector('.chip.all').classList.add('active');
 
-    // عملية المطابقة على شيت IR
-    irData.forEach(irRow => {
-        const newRow = { ...irRow }; // نسخ صف الـ IR كما هو
-        const irNum = cleanServiceNumber(irRow['dsl_number']);
-        const irCategory = String(irRow['case_sub_type'] || '').trim().toLowerCase(); 
-
-        // 1. مطابقة الـ DSL
-        const dslRow = dslMap.get(irNum);
-        if (dslRow) {
-            const dslServiceOrigin = String(dslRow['Service Name'] || '').trim();
-            const dslServiceLower = dslServiceOrigin.toLowerCase();
-            newRow['Current Activity Dsl'] = dslServiceOrigin;
-            newRow['DSLMatch'] = (irCategory === dslServiceLower) ? "The same" : "Changed";
-        } else {
-            newRow['Current Activity Dsl'] = "Not avail";
-            newRow['DSLMatch'] = "Not avail";
-        }
-
-        // 2. مطابقة الـ FTTH
-        const ftthRow = ftthMap.get(irNum);
-        if (ftthRow) {
-            const ftthServiceOrigin = String(ftthRow['Service Name'] || '').trim();
-            const ftthServiceLower = ftthServiceOrigin.toLowerCase();
-            newRow['Current Activity FTTH'] = ftthServiceOrigin;
-            newRow['FTTH Match'] = (irCategory === ftthServiceLower) ? "The same" : "Changed";
-        } else {
-            newRow['Current Activity FTTH'] = "Not avail";
-            newRow['FTTH Match'] = "Not avail";
-        }
-
-        finalCrossMatchData.push(newRow);
-    });
-
-    renderTablePreview(finalCrossMatchData);
-    document.getElementById('btn-export').style.display = 'inline-block';
+    // Hide results
+    document.getElementById('btn-export').style.display  = 'none';
+    document.getElementById('btn-refresh').style.display = 'none';
+    document.getElementById('stats-grid').style.display  = 'none';
+    document.getElementById('filter-bar').style.display  = 'none';
+    document.getElementById('empty-state').style.display = 'block';
+    document.getElementById('table-inner').style.display = 'none';
+    document.getElementById('tbl-footer').style.display  = 'none';
+    document.getElementById('tbl-head').innerHTML = '';
+    document.getElementById('tbl-body').innerHTML = '';
 });
 
-// دالة عرض جزء من الداتا في الـ HTML عشان المتصفح ميهنجش لو الداتا ضخمة
-function renderTablePreview(data) {
-    const thead = document.querySelector('#result-table thead');
-    const tbody = document.querySelector('#result-table tbody');
-    thead.innerHTML = ''; tbody.innerHTML = '';
+// ── STATS ─────────────────────────────────────────────
+function updateStats() {
+    const tot  = finalData.length;
+    const same = finalData.filter(r => r['FTTH Match'] === 'The same').length;
+    const chg  = finalData.filter(r => r['FTTH Match'] === 'Changed').length;
+    const na   = finalData.filter(r => r['FTTH Match'] === 'Not avail').length;
+    const pct  = n => tot ? Math.round(n / tot * 100) + '%' : '—';
 
-    if (data.length === 0) return;
+    document.getElementById('s-total').textContent  = tot.toLocaleString();
+    document.getElementById('s-same').textContent   = same.toLocaleString();
+    document.getElementById('s-chg').textContent    = chg.toLocaleString();
+    document.getElementById('s-na').textContent     = na.toLocaleString();
+    document.getElementById('s-same-p').textContent = pct(same) + ' of total';
+    document.getElementById('s-chg-p').textContent  = pct(chg)  + ' of total';
+    document.getElementById('s-na-p').textContent   = pct(na)   + ' of total';
+}
 
-    const headers = Object.keys(data[0]);
-    let headerHtml = '<tr>';
-    headers.forEach(h => headerHtml += `<th>${h}</th>`);
-    headerHtml += '</tr>';
-    thead.innerHTML = headerHtml;
+// ── FILTER & SEARCH ───────────────────────────────────
+document.querySelectorAll('.chip').forEach(c => {
+    c.addEventListener('click', () => {
+        document.querySelectorAll('.chip').forEach(x => x.classList.remove('active'));
+        c.classList.add('active');
+        activeFilter = c.dataset.f;
+        applyFilter();
+    });
+});
 
-    const fragment = document.createDocumentFragment();
-    // عرض أول 300 صف فقط للحفاظ على سرعة المتصفح
-    const previewData = data.slice(0, 300); 
+document.getElementById('search-input').addEventListener('input', e => {
+    searchVal = e.target.value.toLowerCase();
+    applyFilter();
+});
 
-    previewData.forEach(row => {
+function applyFilter() {
+    filteredData = finalData.filter(row => {
+        if (activeFilter === 'same' && row['FTTH Match'] !== 'The same')  return false;
+        if (activeFilter === 'chg'  && row['FTTH Match'] !== 'Changed')   return false;
+        if (activeFilter === 'na'   && row['FTTH Match'] !== 'Not avail') return false;
+        if (searchVal) {
+            return Object.values(row).some(v => String(v).toLowerCase().includes(searchVal));
+        }
+        return true;
+    });
+    if (sortCol !== null) doSort(false);
+    renderTable();
+}
+
+// ── SORT ──────────────────────────────────────────────
+function doSort(toggle = true) {
+    if (toggle) sortDir *= -1;
+    const key = headers[sortCol];
+    filteredData.sort((a, b) =>
+        String(a[key] || '').localeCompare(String(b[key] || '')) * sortDir
+    );
+}
+
+// ── RENDER TABLE ──────────────────────────────────────
+function renderTable() {
+    const thead = document.getElementById('tbl-head');
+    const tbody = document.getElementById('tbl-body');
+
+    // Header
+    thead.innerHTML = '<tr>' + headers.map((h, i) => {
+        const cls = sortCol === i ? (sortDir === 1 ? 'sort-asc' : 'sort-desc') : '';
+        return `<th class="${cls}" data-i="${i}">${h}<span class="sa"></span></th>`;
+    }).join('') + '</tr>';
+
+    thead.querySelectorAll('th').forEach(th => {
+        th.addEventListener('click', () => {
+            sortCol = +th.dataset.i;
+            doSort(true);
+            renderTable();
+        });
+    });
+
+    // Rows
+    const slice = filteredData.slice(0, PREVIEW);
+    const frag  = document.createDocumentFragment();
+
+    slice.forEach(row => {
         const tr = document.createElement('tr');
         headers.forEach(h => {
             const td = document.createElement('td');
-            td.innerText = row[h] !== undefined ? row[h] : '';
-            
-            // تلوين الخلايا حسب الماتش
-            if (h === 'FTTH Match' || h === 'DSLMatch') {
-                if (row[h] === 'The same') td.className = 'bg-same';
-                else if (row[h] === 'Changed') td.className = 'bg-changed';
-                else if (row[h] === 'Not avail') td.className = 'bg-notavail';
+            const v  = row[h] !== undefined ? String(row[h]) : '';
+            if (h === 'FTTH Match' || h === 'DSL Match') {
+                if      (v === 'The same')  td.innerHTML = `<span class="badge-same">✔ The same</span>`;
+                else if (v === 'Changed')   td.innerHTML = `<span class="badge-chg">⚡ Changed</span>`;
+                else if (v === 'Not avail') td.innerHTML = `<span class="badge-na">✕ Not avail</span>`;
+                else td.textContent = v;
+            } else {
+                td.textContent = v;
             }
             tr.appendChild(td);
         });
-        fragment.appendChild(tr);
+        frag.appendChild(tr);
     });
-    tbody.appendChild(fragment);
+    tbody.innerHTML = '';
+    tbody.appendChild(frag);
 
-    const msgDiv = document.getElementById('render-msg');
-    msgDiv.style.display = 'block';
-    if(data.length > 300) {
-        msgDiv.innerText = `Previewing first 300 rows out of ${data.length}. Export to Excel to get the full Data.`;
-    } else {
-        msgDiv.innerText = `Matched ${data.length} rows successfully.`;
-    }
+    // Footer
+    document.getElementById('footer-count').textContent =
+        `Showing ${Math.min(slice.length, PREVIEW).toLocaleString()} of ${filteredData.length.toLocaleString()} rows`;
+    document.getElementById('footer-note').textContent =
+        filteredData.length > PREVIEW
+            ? `Preview capped at ${PREVIEW} rows — export Excel for full data`
+            : '';
 }
 
-// دالة تصدير الملف لإكسيل باستخدام ExcelJS للاحتفاظ بالألوان 
+// ── EXPORT ────────────────────────────────────────────
 document.getElementById('btn-export').addEventListener('click', async () => {
-    if (finalCrossMatchData.length === 0) return;
+    if (!finalData.length) return;
+    setBtnsDisabled(true);
+    showOverlay('Building Excel file…', 10);
 
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Cross-Match Report');
-    
-    const headers = Object.keys(finalCrossMatchData[0]);
-    
-    // إنشاء الأعمدة
-    worksheet.columns = headers.map(h => ({ header: h, key: h, width: 20 }));
-    
-    // إضافة الداتا
-    worksheet.addRows(finalCrossMatchData);
+    try {
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('Cross-Match Report');
+        ws.columns = headers.map(h => ({ header: h, key: h, width: 22 }));
 
-    // ستايل صف العناوين (الكحلي)
-    worksheet.getRow(1).eachCell((cell) => {
-        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A192F' } };
-        cell.alignment = { vertical: 'middle', horizontal: 'center' };
-    });
+        updateProgress(30, 'Writing rows…');
+        await tick();
+        ws.addRows(finalData);
 
-    // ستايل الألوان بناءً على الكلمات
-    const ftthMatchCol = headers.indexOf('FTTH Match') + 1;
-    const dslMatchCol = headers.indexOf('DSLMatch') + 1;
+        updateProgress(60, 'Applying styles…');
+        await tick();
 
-    worksheet.eachRow((row, rowNumber) => {
-        if (rowNumber === 1) return; // تجاوز صف العناوين
-        
-        [ftthMatchCol, dslMatchCol].forEach(colIndex => {
-            if (colIndex > 0) {
-                const cell = row.getCell(colIndex);
-                if (cell.value === 'The same') {
-                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } };
-                    cell.font = { color: { argb: 'FF065F46' }, bold: true };
-                } else if (cell.value === 'Changed') {
-                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
-                    cell.font = { color: { argb: 'FF92400E' }, bold: true };
-                } else if (cell.value === 'Not avail') {
-                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
-                    cell.font = { color: { argb: 'FF991B1B' }, bold: true };
-                }
-            }
+        // Header row
+        ws.getRow(1).eachCell(cell => {
+            cell.font      = { bold: true, color: { argb: 'FFFFFFFF' } };
+            cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A192F' } };
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
         });
-    });
 
-    // استخراج الملف
-    const buffer = await workbook.xlsx.writeBuffer();
-    saveAs(new Blob([buffer]), 'Samira_CrossMatch_Output.xlsx');
+        const ftthCol = headers.indexOf('FTTH Match') + 1;
+        const dslCol  = headers.indexOf('DSL Match')  + 1;
+
+        ws.eachRow((row, rn) => {
+            if (rn === 1) return;
+            [ftthCol, dslCol].forEach(ci => {
+                if (!ci) return;
+                const cell = row.getCell(ci);
+                if      (cell.value === 'The same')  { cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFD1FAE5' } }; cell.font = { color:{ argb:'FF065F46' }, bold:true }; }
+                else if (cell.value === 'Changed')   { cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF3C7' } }; cell.font = { color:{ argb:'FF92400E' }, bold:true }; }
+                else if (cell.value === 'Not avail') { cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEE2E2' } }; cell.font = { color:{ argb:'FF991B1B' }, bold:true }; }
+            });
+        });
+
+        updateProgress(90, 'Generating file…');
+        await tick();
+
+        const buf = await wb.xlsx.writeBuffer();
+        saveAs(new Blob([buf]), 'Samira_CrossMatch_Output.xlsx');
+        updateProgress(100, 'Done!');
+        setTimeout(hideOverlay, 400);
+    } catch (err) {
+        hideOverlay();
+        alert('Export failed: ' + err.message);
+    } finally {
+        setBtnsDisabled(false);
+    }
 });
+
+// ── OVERLAY HELPERS ───────────────────────────────────
+function showOverlay(msg, pct = 0) {
+    document.getElementById('overlay-txt').textContent = msg;
+    document.getElementById('progress-bar').style.width = pct + '%';
+    document.getElementById('progress-pct').textContent = pct + '%';
+    document.getElementById('overlay').classList.add('show');
+}
+
+function updateProgress(pct, msg) {
+    if (msg) document.getElementById('overlay-txt').textContent = msg;
+    document.getElementById('progress-bar').style.width = pct + '%';
+    document.getElementById('progress-pct').textContent = pct + '%';
+}
+
+function hideOverlay() {
+    document.getElementById('overlay').classList.remove('show');
+}
+
+function setBtnsDisabled(state) {
+    ['btn-run', 'btn-refresh', 'btn-export', 'btn-reset'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = state;
+    });
+}
+
+// ── UTILS ─────────────────────────────────────────────
+function tick() {
+    return new Promise(r => setTimeout(r, 0));
+}
+
+function formatBytes(bytes) {
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}

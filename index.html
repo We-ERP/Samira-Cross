@@ -4,64 +4,129 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Samira Cross-Match</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
     <link rel="stylesheet" href="style.css">
-    
-    <!-- مكتبة لقراءة ملفات الإكسيل بسرعة -->
+
+    <!-- Read Excel files -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <!-- مكتبة لتصدير الإكسيل مع الألوان والتنسيقات -->
+    <!-- Write colored Excel output -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+    <!-- File download -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 </head>
 <body>
-    <div class="container">
-        <header>
+<div class="app">
+
+    <!-- ── HEADER ── -->
+    <header class="hdr">
+        <div class="hdr-left">
             <h1>Samira Cross-Match</h1>
-            <p>Advanced Data Cross-Referencing System (FTTH, DSL, IR)</p>
-        </header>
-        
-        <div class="upload-section">
-            <!-- Upload FTTH -->
-            <div class="file-box">
-                <label>1. Upload FTTH Sheet</label>
-                <div class="input-wrapper">
-                    <input type="file" id="file-ftth" accept=".xlsx, .xls, .csv">
-                </div>
-                <span id="ftth-status" class="status-badge">Pending...</span>
-            </div>
-            
-            <!-- Upload DSL -->
-            <div class="file-box">
-                <label>2. Upload DSL Sheet</label>
-                <div class="input-wrapper">
-                    <input type="file" id="file-dsl" accept=".xlsx, .xls, .csv">
-                </div>
-                <span id="dsl-status" class="status-badge">Pending...</span>
-            </div>
-            
-            <!-- Upload IR -->
-            <div class="file-box">
-                <label>3. Upload IR Sheet (Base)</label>
-                <div class="input-wrapper">
-                    <input type="file" id="file-ir" accept=".xlsx, .xls, .csv">
-                </div>
-                <span id="ir-status" class="status-badge">Pending...</span>
-            </div>
+            <p>Advanced Data Cross-Referencing · FTTH · DSL · IR</p>
         </div>
+        <span class="hdr-badge">v2.0</span>
+    </header>
 
-        <div class="actions">
-            <button id="btn-run" class="btn-3d">Run Cross-Match</button>
-            <button id="btn-export" class="btn-3d btn-export" style="display:none;">Export to Excel</button>
+    <!-- ── UPLOAD ZONE ── -->
+    <div class="upload-grid">
+        <div class="drop-zone dz-ftth" id="dz-ftth">
+            <input type="file" id="file-ftth" accept=".xlsx,.xls,.csv" class="dz-input">
+            <div class="dz-icon">📡</div>
+            <div class="dz-label">FTTH Sheet</div>
+            <div class="dz-sub">Drag & drop or click to browse</div>
+            <span class="dz-badge" id="ftth-status"><span class="dot"></span> Waiting</span>
         </div>
-
-        <div class="table-container">
-            <div id="render-msg" style="display: none; color:#0A192F; font-weight:bold; margin-bottom:10px;"></div>
-            <table id="result-table">
-                <thead></thead>
-                <tbody></tbody>
-            </table>
+        <div class="drop-zone dz-dsl" id="dz-dsl">
+            <input type="file" id="file-dsl" accept=".xlsx,.xls,.csv" class="dz-input">
+            <div class="dz-icon">🔌</div>
+            <div class="dz-label">DSL Sheet</div>
+            <div class="dz-sub">Drag & drop or click to browse</div>
+            <span class="dz-badge" id="dsl-status"><span class="dot"></span> Waiting</span>
+        </div>
+        <div class="drop-zone dz-ir" id="dz-ir">
+            <input type="file" id="file-ir" accept=".xlsx,.xls,.csv" class="dz-input">
+            <div class="dz-icon">📋</div>
+            <div class="dz-label">IR Sheet (Base)</div>
+            <div class="dz-sub">Drag & drop or click to browse</div>
+            <span class="dz-badge" id="ir-status"><span class="dot"></span> Waiting</span>
         </div>
     </div>
-    
-    <script src="script.js"></script>
+
+    <!-- ── ACTION BUTTONS ── -->
+    <div class="actions">
+        <button class="btn btn-run"     id="btn-run">▶ Run Cross-Match</button>
+        <button class="btn btn-refresh" id="btn-refresh" style="display:none">🔄 Refresh</button>
+        <button class="btn btn-export"  id="btn-export"  style="display:none">⬇ Export to Excel</button>
+        <button class="btn btn-reset"   id="btn-reset">✕ Reset</button>
+    </div>
+
+    <!-- ── STATS DASHBOARD ── -->
+    <div class="stats-grid" id="stats-grid" style="display:none">
+        <div class="stat-card total">
+            <div class="stat-num" id="s-total">0</div>
+            <div class="stat-lbl">Total Rows Processed</div>
+        </div>
+        <div class="stat-card same">
+            <div class="stat-num" id="s-same">0</div>
+            <div class="stat-lbl">The Same (FTTH)</div>
+            <div class="stat-pct" id="s-same-p"></div>
+        </div>
+        <div class="stat-card changed">
+            <div class="stat-num" id="s-chg">0</div>
+            <div class="stat-lbl">Changed (FTTH)</div>
+            <div class="stat-pct" id="s-chg-p"></div>
+        </div>
+        <div class="stat-card na">
+            <div class="stat-num" id="s-na">0</div>
+            <div class="stat-lbl">Not Available (FTTH)</div>
+            <div class="stat-pct" id="s-na-p"></div>
+        </div>
+    </div>
+
+    <!-- ── FILTER BAR ── -->
+    <div class="filter-bar" id="filter-bar" style="display:none">
+        <div class="search-wrap">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="search-input" placeholder="Search any column…">
+        </div>
+        <div class="filter-chips">
+            <span class="chip all active" data-f="all">All</span>
+            <span class="chip same" data-f="same">✔ The Same</span>
+            <span class="chip chg"  data-f="chg">⚡ Changed</span>
+            <span class="chip na"   data-f="na">✕ Not Avail</span>
+        </div>
+    </div>
+
+    <!-- ── RESULTS TABLE ── -->
+    <div class="table-wrap">
+        <div class="empty-state" id="empty-state">
+            <div class="big-icon">📊</div>
+            <p>Upload your three files and hit <strong>Run Cross-Match</strong> to see results here.</p>
+        </div>
+        <div class="table-inner" id="table-inner" style="display:none">
+            <table>
+                <thead id="tbl-head"></thead>
+                <tbody id="tbl-body"></tbody>
+            </table>
+        </div>
+        <div class="table-footer" id="tbl-footer" style="display:none">
+            <span id="footer-count"></span>
+            <span id="footer-note"></span>
+        </div>
+    </div>
+
+</div>
+
+<!-- ── LOADING OVERLAY ── -->
+<div class="overlay" id="overlay">
+    <div class="spinner"></div>
+    <div class="overlay-txt" id="overlay-txt">Processing…</div>
+    <div class="progress-wrap">
+        <div class="progress-bar" id="progress-bar"></div>
+    </div>
+    <div class="progress-pct" id="progress-pct">0%</div>
+</div>
+
+<script src="script.js"></script>
 </body>
 </html>
