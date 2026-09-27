@@ -1,126 +1,632 @@
 <!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Samira Cross-Match</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
-    <link rel="stylesheet" href="style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Samira Cross-Match v2.0</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<style>
+/* ── VARIABLES ── */
+:root {
+  --navy:    #0A192F;
+  --navy-mid:#112240;
+  --navy-lt: #1e3a5f;
+  --teal:    #00B4D8;
+  --surface: #EEF2F7;
+  --card:    #FFFFFF;
+  --text:    #1a2e44;
+  --muted:   #64748b;
+  --border:  #CBD5E1;
+  --same-bg: #D1FAE5; --same-txt: #065F46; --same-b: #6EE7B7;
+  --chg-bg:  #FEF3C7; --chg-txt:  #92400E; --chg-b:  #FCD34D;
+  --na-bg:   #FEE2E2; --na-txt:   #991B1B; --na-b:   #FCA5A5;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%;font-family:'Inter',sans-serif;background:var(--surface);color:var(--text)}
+.app{max-width:1300px;margin:0 auto;padding:24px 20px 60px}
 
-    <!-- قراءة Excel -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <!-- تصدير Excel مع ألوان -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
-    <!-- حفظ الملفات -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+/* HEADER */
+.hdr{background:var(--navy);border-radius:16px;padding:36px 40px;margin-bottom:28px;
+     display:flex;align-items:center;justify-content:space-between;gap:20px}
+.hdr-left h1{color:#fff;font-size:28px;font-weight:800;letter-spacing:-.5px}
+.hdr-left p{color:#94a3b8;font-size:14px;margin-top:6px}
+.hdr-badge{background:var(--teal);color:var(--navy);font-weight:700;font-size:12px;
+           padding:4px 12px;border-radius:20px;letter-spacing:.5px;white-space:nowrap}
+
+/* UPLOAD GRID */
+.upload-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px}
+.drop-zone{background:var(--card);border:2px dashed var(--border);border-radius:14px;
+           padding:28px 20px;text-align:center;cursor:pointer;
+           transition:border-color .2s,background .2s;position:relative;overflow:hidden}
+.drop-zone.drag-over,.drop-zone:hover{border-color:var(--teal);background:#f0fbff}
+.drop-zone.loaded{border-color:var(--teal);border-style:solid}
+.dz-input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;z-index:2}
+.dz-icon{width:44px;height:44px;margin:0 auto 14px;border-radius:10px;
+         display:flex;align-items:center;justify-content:center;font-size:20px}
+.dz-ftth .dz-icon{background:#dbeafe;color:#1d4ed8}
+.dz-dsl  .dz-icon{background:#ede9fe;color:#6d28d9}
+.dz-ir   .dz-icon{background:#fce7f3;color:#be185d}
+.dz-label{font-weight:700;font-size:15px;margin-bottom:6px}
+.dz-sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+.dz-badge{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;
+          border-radius:20px;font-size:12px;font-weight:600;
+          background:#f1f5f9;color:var(--muted);transition:background .2s,color .2s;
+          pointer-events:none;position:relative;z-index:3}
+.dz-badge.ok{background:var(--navy);color:#fff}
+.dz-badge .dot{width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.7}
+
+/* ACTIONS */
+.actions{display:flex;gap:12px;justify-content:center;margin-bottom:28px;flex-wrap:wrap}
+.btn{border:none;cursor:pointer;padding:14px 36px;font-size:15px;font-weight:700;
+     border-radius:10px;transition:transform .1s,box-shadow .1s,opacity .2s;
+     letter-spacing:.2px;font-family:inherit}
+.btn:active{transform:translateY(3px)!important;box-shadow:none!important}
+.btn:disabled{opacity:.4;cursor:not-allowed;box-shadow:none!important;transform:none!important}
+.btn-run{background:var(--navy);color:#fff;
+         box-shadow:0 6px 0 #05101f,0 10px 20px rgba(0,0,0,.18)}
+.btn-run:hover:not(:disabled){background:var(--navy-lt)}
+.btn-refresh{background:#0369a1;color:#fff;
+             box-shadow:0 6px 0 #024a75,0 10px 18px rgba(0,0,0,.15)}
+.btn-refresh:hover:not(:disabled){background:#0284c7}
+.btn-export{background:#059669;color:#fff;
+            box-shadow:0 6px 0 #065f46,0 10px 20px rgba(0,0,0,.15)}
+.btn-export:hover:not(:disabled){background:#047857}
+.btn-reset{background:#fff;color:#dc2626;border:2px solid #fca5a5;
+           box-shadow:0 4px 0 #fee2e2}
+.btn-reset:hover:not(:disabled){background:#fff1f2}
+
+/* STATS */
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
+.stat-card{background:var(--card);border-radius:12px;padding:18px 20px;
+           border-left:4px solid transparent;transition:transform .15s}
+.stat-card:hover{transform:translateY(-2px)}
+.stat-card.total{border-color:var(--teal)}
+.stat-card.same{border-color:#10b981}
+.stat-card.changed{border-color:#f59e0b}
+.stat-card.na{border-color:#ef4444}
+.stat-num{font-size:30px;font-weight:800;line-height:1}
+.stat-lbl{font-size:12px;color:var(--muted);margin-top:5px;font-weight:500}
+.stat-pct{font-size:12px;font-weight:700;margin-top:4px}
+.same .stat-pct{color:#059669}.changed .stat-pct{color:#d97706}.na .stat-pct{color:#dc2626}
+
+/* FILTER BAR */
+.filter-bar{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
+.search-wrap{position:relative;flex:1;min-width:200px}
+.search-wrap input{width:100%;padding:10px 14px 10px 38px;border:1.5px solid var(--border);
+                   border-radius:8px;font-size:14px;outline:none;font-family:inherit;
+                   transition:border-color .2s}
+.search-wrap input:focus{border-color:var(--teal)}
+.search-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);
+             color:var(--muted);font-size:15px}
+.filter-chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{padding:6px 14px;border-radius:20px;font-size:13px;font-weight:600;
+      cursor:pointer;border:2px solid transparent;transition:all .15s}
+.chip.all{background:#f1f5f9;color:var(--text);border-color:var(--border)}
+.chip.same{background:var(--same-bg);color:var(--same-txt);border-color:var(--same-b)}
+.chip.chg{background:var(--chg-bg);color:var(--chg-txt);border-color:var(--chg-b)}
+.chip.na{background:var(--na-bg);color:var(--na-txt);border-color:var(--na-b)}
+.chip.active{box-shadow:0 0 0 2px var(--navy)}
+
+/* TABLE */
+.table-wrap{background:var(--card);border-radius:14px;overflow:hidden;
+            box-shadow:0 4px 16px rgba(0,0,0,.06)}
+.table-inner{overflow:auto;max-height:540px}
+table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:13.5px}
+thead th{background:var(--navy);color:#fff;padding:12px 16px;text-align:left;
+         position:sticky;top:0;z-index:10;cursor:pointer;user-select:none;
+         font-size:12.5px;font-weight:600;letter-spacing:.3px;transition:background .15s}
+thead th:hover{background:var(--navy-lt)}
+thead th .sort-arrow{display:inline-block;margin-left:5px;opacity:.4}
+thead th.sort-asc  .sort-arrow::after{content:'▲'}
+thead th.sort-desc .sort-arrow::after{content:'▼'}
+thead th:not(.sort-asc):not(.sort-desc) .sort-arrow::after{content:'⇅'}
+tbody tr:hover td{background:#f8fafc!important}
+td{padding:10px 16px;border-bottom:1px solid #f1f5f9;color:var(--text)}
+.badge-same{background:var(--same-bg);color:var(--same-txt);padding:3px 10px;
+            border-radius:12px;font-size:12px;font-weight:700;display:inline-block}
+.badge-chg{background:var(--chg-bg);color:var(--chg-txt);padding:3px 10px;
+           border-radius:12px;font-size:12px;font-weight:700;display:inline-block}
+.badge-na{background:var(--na-bg);color:var(--na-txt);padding:3px 10px;
+          border-radius:12px;font-size:12px;font-weight:700;display:inline-block}
+.table-footer{padding:12px 20px;background:#f8fafc;border-top:1px solid var(--border);
+              font-size:13px;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+
+/* EMPTY STATE */
+.empty-state{padding:60px 20px;text-align:center;color:var(--muted)}
+.empty-state .big-icon{font-size:48px;margin-bottom:12px;opacity:.4}
+.empty-state p{font-size:15px}
+
+/* OVERLAY */
+.overlay{position:fixed;inset:0;background:rgba(10,25,47,.75);z-index:9999;
+         display:none;align-items:center;justify-content:center;
+         flex-direction:column;gap:16px;backdrop-filter:blur(4px)}
+.overlay.show{display:flex}
+.spinner{width:52px;height:52px;border:4px solid rgba(255,255,255,.2);
+         border-top-color:var(--teal);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.overlay-txt{color:#fff;font-weight:600;font-size:15px;text-align:center;max-width:340px}
+.prog-wrap{width:300px;background:rgba(255,255,255,.15);border-radius:99px;height:9px;overflow:hidden}
+.prog-bar{height:100%;background:var(--teal);border-radius:99px;
+          transition:width .25s ease;width:0%}
+.prog-pct{color:var(--teal);font-size:13px;font-weight:700;letter-spacing:.5px}
+
+@media(max-width:800px){
+  .upload-grid{grid-template-columns:1fr}
+  .stats-grid{grid-template-columns:repeat(2,1fr)}
+  .hdr{flex-direction:column;text-align:center}
+}
+</style>
 </head>
 <body>
 <div class="app">
 
-    <!-- HEADER -->
-    <header class="hdr">
-        <div class="hdr-left">
-            <h1>Samira Cross-Match</h1>
-            <p>Advanced Data Cross-Referencing · FTTH · DSL · IR</p>
-        </div>
-        <span class="hdr-badge">v2.0</span>
-    </header>
-
-    <!-- UPLOAD ZONE -->
-    <div class="upload-grid">
-        <div class="drop-zone dz-ftth" id="dz-ftth">
-            <input type="file" id="file-ftth" accept=".xlsx,.xls,.csv" class="dz-input">
-            <div class="dz-icon">📡</div>
-            <div class="dz-label">FTTH Sheet</div>
-            <div class="dz-sub">Drag & drop or click to browse</div>
-            <span class="dz-badge" id="ftth-status"><span class="dot"></span> Waiting</span>
-        </div>
-        <div class="drop-zone dz-dsl" id="dz-dsl">
-            <input type="file" id="file-dsl" accept=".xlsx,.xls,.csv" class="dz-input">
-            <div class="dz-icon">🔌</div>
-            <div class="dz-label">DSL Sheet</div>
-            <div class="dz-sub">Drag & drop or click to browse</div>
-            <span class="dz-badge" id="dsl-status"><span class="dot"></span> Waiting</span>
-        </div>
-        <div class="drop-zone dz-ir" id="dz-ir">
-            <input type="file" id="file-ir" accept=".xlsx,.xls,.csv" class="dz-input">
-            <div class="dz-icon">📋</div>
-            <div class="dz-label">IR Sheet (Base)</div>
-            <div class="dz-sub">Drag & drop or click to browse</div>
-            <span class="dz-badge" id="ir-status"><span class="dot"></span> Waiting</span>
-        </div>
+  <!-- HEADER -->
+  <header class="hdr">
+    <div class="hdr-left">
+      <h1>Samira Cross-Match</h1>
+      <p>Advanced Data Cross-Referencing · FTTH · DSL · IR</p>
     </div>
+    <span class="hdr-badge">v2.0</span>
+  </header>
 
-    <!-- ACTIONS -->
-    <div class="actions">
-        <button class="btn btn-run" id="btn-run">▶ Run Cross-Match</button>
-        <button class="btn btn-export" id="btn-export" style="display:none">⬇ Export to Excel</button>
+  <!-- UPLOAD GRID -->
+  <div class="upload-grid">
+    <div class="drop-zone dz-ftth" id="dz-ftth">
+      <input type="file" id="file-ftth" accept=".xlsx,.xls,.csv" class="dz-input">
+      <div class="dz-icon">📡</div>
+      <div class="dz-label">FTTH Sheet</div>
+      <div class="dz-sub">Drag & drop or click to browse</div>
+      <span class="dz-badge" id="ftth-status"><span class="dot"></span> Waiting</span>
     </div>
+    <div class="drop-zone dz-dsl" id="dz-dsl">
+      <input type="file" id="file-dsl" accept=".xlsx,.xls,.csv" class="dz-input">
+      <div class="dz-icon">🔌</div>
+      <div class="dz-label">DSL Sheet</div>
+      <div class="dz-sub">Drag & drop or click to browse</div>
+      <span class="dz-badge" id="dsl-status"><span class="dot"></span> Waiting</span>
+    </div>
+    <div class="drop-zone dz-ir" id="dz-ir">
+      <input type="file" id="file-ir" accept=".xlsx,.xls,.csv" class="dz-input">
+      <div class="dz-icon">📋</div>
+      <div class="dz-label">IR Sheet (Base)</div>
+      <div class="dz-sub">Drag & drop or click to browse</div>
+      <span class="dz-badge" id="ir-status"><span class="dot"></span> Waiting</span>
+    </div>
+  </div>
 
-    <!-- STATS DASHBOARD -->
-    <div class="stats-grid" id="stats-grid" style="display:none">
-        <div class="stat-card total">
-            <div class="stat-num" id="s-total">0</div>
-            <div class="stat-lbl">Total Rows Processed</div>
-        </div>
-        <div class="stat-card same">
-            <div class="stat-num" id="s-same">0</div>
-            <div class="stat-lbl">The Same (FTTH)</div>
-            <div class="stat-pct" id="s-same-p"></div>
-        </div>
-        <div class="stat-card changed">
-            <div class="stat-num" id="s-chg">0</div>
-            <div class="stat-lbl">Changed (FTTH)</div>
-            <div class="stat-pct" id="s-chg-p"></div>
-        </div>
-        <div class="stat-card na">
-            <div class="stat-num" id="s-na">0</div>
-            <div class="stat-lbl">Not Available (FTTH)</div>
-            <div class="stat-pct" id="s-na-p"></div>
-        </div>
-    </div>
+  <!-- ACTIONS -->
+  <div class="actions">
+    <button class="btn btn-run"     id="btn-run">▶ Run Cross-Match</button>
+    <button class="btn btn-refresh" id="btn-refresh" style="display:none">🔄 Refresh</button>
+    <button class="btn btn-export"  id="btn-export"  style="display:none">⬇ Export to Excel</button>
+    <button class="btn btn-reset"   id="btn-reset">✕ Reset</button>
+  </div>
 
-    <!-- FILTER BAR -->
-    <div class="filter-bar" id="filter-bar" style="display:none">
-        <div class="search-wrap">
-            <span class="search-icon">🔍</span>
-            <input type="text" id="search-input" placeholder="Search any column…">
-        </div>
-        <div class="filter-chips">
-            <span class="chip all active" data-f="all">All</span>
-            <span class="chip same" data-f="same">✔ The Same</span>
-            <span class="chip chg"  data-f="chg">⚡ Changed</span>
-            <span class="chip na"   data-f="na">✕ Not Avail</span>
-        </div>
+  <!-- STATS -->
+  <div class="stats-grid" id="stats-grid" style="display:none">
+    <div class="stat-card total">
+      <div class="stat-num" id="s-total">0</div>
+      <div class="stat-lbl">Total Rows Processed</div>
     </div>
+    <div class="stat-card same">
+      <div class="stat-num" id="s-same">0</div>
+      <div class="stat-lbl">The Same (FTTH)</div>
+      <div class="stat-pct" id="s-same-p"></div>
+    </div>
+    <div class="stat-card changed">
+      <div class="stat-num" id="s-chg">0</div>
+      <div class="stat-lbl">Changed (FTTH)</div>
+      <div class="stat-pct" id="s-chg-p"></div>
+    </div>
+    <div class="stat-card na">
+      <div class="stat-num" id="s-na">0</div>
+      <div class="stat-lbl">Not Available (FTTH)</div>
+      <div class="stat-pct" id="s-na-p"></div>
+    </div>
+  </div>
 
-    <!-- RESULTS TABLE -->
-    <div class="table-wrap" id="table-wrap">
-        <div class="empty-state" id="empty-state">
-            <div class="big-icon">📊</div>
-            <p>Upload your three files and hit <strong>Run Cross-Match</strong> to see results here.</p>
-        </div>
-        <div class="table-inner" id="table-inner" style="display:none">
-            <table id="result-table">
-                <thead id="tbl-head"></thead>
-                <tbody id="tbl-body"></tbody>
-            </table>
-        </div>
-        <div class="table-footer" id="tbl-footer" style="display:none">
-            <span id="footer-count"></span>
-            <span id="footer-note" style="font-size:12px"></span>
-        </div>
+  <!-- FILTER BAR -->
+  <div class="filter-bar" id="filter-bar" style="display:none">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="search-input" placeholder="Search any column…">
     </div>
+    <div class="filter-chips">
+      <span class="chip all active" data-f="all">All</span>
+      <span class="chip same" data-f="same">✔ The Same</span>
+      <span class="chip chg"  data-f="chg">⚡ Changed</span>
+      <span class="chip na"   data-f="na">✕ Not Avail</span>
+    </div>
+  </div>
+
+  <!-- TABLE -->
+  <div class="table-wrap">
+    <div class="empty-state" id="empty-state">
+      <div class="big-icon">📊</div>
+      <p>Upload your three files and hit <strong>Run Cross-Match</strong> to see results here.</p>
+    </div>
+    <div class="table-inner" id="table-inner" style="display:none">
+      <table id="result-table">
+        <thead id="tbl-head"></thead>
+        <tbody id="tbl-body"></tbody>
+      </table>
+    </div>
+    <div class="table-footer" id="tbl-footer" style="display:none">
+      <span id="footer-count"></span>
+      <span id="footer-note" style="font-size:12px"></span>
+    </div>
+  </div>
 
 </div>
 
-<!-- LOADING OVERLAY -->
+<!-- OVERLAY -->
 <div class="overlay" id="overlay">
-    <div class="spinner"></div>
-    <div class="overlay-txt" id="overlay-txt">Processing…</div>
+  <div class="spinner"></div>
+  <div class="overlay-txt" id="overlay-txt">Processing…</div>
+  <div class="prog-wrap"><div class="prog-bar" id="prog-bar"></div></div>
+  <div class="prog-pct" id="prog-pct">0%</div>
 </div>
 
-<script src="script.js"></script>
+<script>
+// ── STATE ─────────────────────────────────────────────
+let ftthData = null, dslData = null, irData = null;
+let finalData = [], filteredData = [], headers = [];
+let sortCol = null, sortDir = 1;
+let activeFilter = 'all', searchVal = '';
+const PREVIEW  = 500;
+const CHUNK_SZ = 2000;
+
+// ── DRAG & DROP SETUP ─────────────────────────────────
+function setupDrop(dzId, inputId, type) {
+    const dz  = document.getElementById(dzId);
+    const inp = document.getElementById(inputId);
+    inp.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0], type); });
+    dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('drag-over'); });
+    dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+    dz.addEventListener('drop', e => {
+        e.preventDefault(); dz.classList.remove('drag-over');
+        if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0], type);
+    });
+}
+setupDrop('dz-ftth', 'file-ftth', 'ftth');
+setupDrop('dz-dsl',  'file-dsl',  'dsl');
+setupDrop('dz-ir',   'file-ir',   'ir');
+
+// ── LOAD FILE (with real progress for large files) ────
+function loadFile(file, type) {
+    setProgress(0, 'Reading ' + type.toUpperCase() + ' file…');
+    showOverlay();
+    const reader = new FileReader();
+
+    // Real byte-level progress (important for 70MB FTTH)
+    reader.onprogress = e => {
+        if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 55);
+            setProgress(pct, 'Loading ' + type.toUpperCase() + '… ' + fmtBytes(e.loaded) + ' / ' + fmtBytes(e.total));
+        }
+    };
+
+    reader.onload = e => {
+        setProgress(60, 'Parsing ' + type.toUpperCase() + ' — please wait for large files…');
+        // Yield so browser can paint the progress update before XLSX.read blocks
+        setTimeout(() => {
+            try {
+                const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                const ws = wb.Sheets[wb.SheetNames[0]];
+                setProgress(85, 'Converting rows…');
+                setTimeout(() => {
+                    const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+                    const badge = document.getElementById(type + '-status');
+                    badge.innerHTML = '<span class="dot"></span> ' + json.length.toLocaleString() + ' rows';
+                    badge.classList.add('ok');
+                    document.getElementById('dz-' + type).classList.add('loaded');
+                    if (type === 'ftth') ftthData = json;
+                    if (type === 'dsl')  dslData  = json;
+                    if (type === 'ir')   irData   = json;
+                    setProgress(100, 'Done!');
+                    setTimeout(hideOverlay, 400);
+                }, 30);
+            } catch (err) {
+                hideOverlay();
+                alert('Error reading file: ' + err.message);
+            }
+        }, 50);
+    };
+
+    reader.onerror = () => { hideOverlay(); alert('Failed to read file.'); };
+    reader.readAsArrayBuffer(file);
+}
+
+// ── CLEAN SERVICE NUMBER ──────────────────────────────
+function cleanServiceNumber(val) {
+    if (!val) return '';
+    return String(val).toUpperCase().replace(/FBB/g, '').replace(/FV/g, '').trim();
+}
+
+// ── RUN CROSS-MATCH ───────────────────────────────────
+document.getElementById('btn-run').addEventListener('click', runMatch);
+document.getElementById('btn-refresh').addEventListener('click', runMatch);
+
+async function runMatch() {
+    if (!ftthData || !dslData || !irData) {
+        alert('Please upload all 3 sheets (FTTH, DSL, IR) before running.');
+        return;
+    }
+
+    setAllBtns(true);
+    setProgress(0, 'Building lookup tables…');
+    showOverlay();
+    await tick();
+
+    // Build O(1) Maps using Service Number
+    const dslMap  = new Map();
+    const ftthMap = new Map();
+    dslData.forEach(row => {
+        const num = cleanServiceNumber(row['Service Number']);
+        if (num) dslMap.set(num, row);
+    });
+    ftthData.forEach(row => {
+        const num = cleanServiceNumber(row['Service Number']);
+        if (num) ftthMap.set(num, row);
+    });
+
+    setProgress(5, 'Starting cross-match…');
+    await tick();
+
+    finalData = [];
+    const total = irData.length;
+
+    // Process in async chunks so progress bar updates
+    for (let i = 0; i < total; i += CHUNK_SZ) {
+        irData.slice(i, i + CHUNK_SZ).forEach(irRow => {
+            const newRow = { ...irRow };
+            const irNum = cleanServiceNumber(irRow['dsl_number']);
+            const irCategory = String(irRow['case_sub_type'] || '').trim().toLowerCase();
+
+            // ── DSL MATCH ──
+            // FIX: use 'Current Activity' column (not 'Service Name')
+            const dslRow = dslMap.get(irNum);
+            if (dslRow) {
+                const dslActivity = String(dslRow['Current Activity'] || '').trim();
+                newRow['Current Activity Dsl'] = dslActivity;
+                newRow['DSLMatch'] = (irCategory === dslActivity.toLowerCase()) ? 'The same' : 'Changed';
+            } else {
+                newRow['Current Activity Dsl'] = 'Not avail';
+                newRow['DSLMatch'] = 'Not avail';
+            }
+
+            // ── FTTH MATCH ──
+            // FIX: use 'Current Activity' column (not 'Service Name')
+            const ftthRow = ftthMap.get(irNum);
+            if (ftthRow) {
+                const ftthActivity = String(ftthRow['Current Activity'] || '').trim();
+                newRow['Current Activity FTTH'] = ftthActivity;
+                newRow['FTTH Match'] = (irCategory === ftthActivity.toLowerCase()) ? 'The same' : 'Changed';
+            } else {
+                newRow['Current Activity FTTH'] = 'Not avail';
+                newRow['FTTH Match'] = 'Not avail';
+            }
+
+            finalData.push(newRow);
+        });
+
+        const pct = 5 + Math.round(Math.min((i + CHUNK_SZ) / total, 1) * 90);
+        setProgress(pct, 'Matched ' + Math.min(i + CHUNK_SZ, total).toLocaleString() + ' of ' + total.toLocaleString() + ' rows…');
+        await tick();
+    }
+
+    setProgress(100, 'Rendering results…');
+    await tick();
+
+    headers = finalData.length ? Object.keys(finalData[0]) : [];
+    updateStats();
+    applyFilter();
+
+    document.getElementById('btn-export').style.display  = 'inline-block';
+    document.getElementById('btn-refresh').style.display = 'inline-block';
+    document.getElementById('stats-grid').style.display  = 'grid';
+    document.getElementById('filter-bar').style.display  = 'flex';
+    document.getElementById('empty-state').style.display = 'none';
+    document.getElementById('table-inner').style.display = 'block';
+    document.getElementById('tbl-footer').style.display  = 'flex';
+
+    setAllBtns(false);
+    setTimeout(hideOverlay, 300);
+}
+
+// ── RESET ─────────────────────────────────────────────
+document.getElementById('btn-reset').addEventListener('click', () => {
+    if (!confirm('Reset everything? All uploaded files and results will be cleared.')) return;
+
+    ftthData = dslData = irData = null;
+    finalData = []; filteredData = []; headers = [];
+    sortCol = null; sortDir = 1; activeFilter = 'all'; searchVal = '';
+
+    ['ftth', 'dsl', 'ir'].forEach(t => {
+        document.getElementById('file-' + t).value = '';
+        const badge = document.getElementById(t + '-status');
+        badge.innerHTML = '<span class="dot"></span> Waiting';
+        badge.classList.remove('ok');
+        document.getElementById('dz-' + t).classList.remove('loaded');
+    });
+
+    document.getElementById('search-input').value = '';
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    document.querySelector('.chip.all').classList.add('active');
+
+    document.getElementById('btn-export').style.display  = 'none';
+    document.getElementById('btn-refresh').style.display = 'none';
+    document.getElementById('stats-grid').style.display  = 'none';
+    document.getElementById('filter-bar').style.display  = 'none';
+    document.getElementById('empty-state').style.display = 'block';
+    document.getElementById('table-inner').style.display = 'none';
+    document.getElementById('tbl-footer').style.display  = 'none';
+    document.getElementById('tbl-head').innerHTML = '';
+    document.getElementById('tbl-body').innerHTML = '';
+});
+
+// ── STATS ─────────────────────────────────────────────
+function updateStats() {
+    const tot  = finalData.length;
+    const same = finalData.filter(r => r['FTTH Match'] === 'The same').length;
+    const chg  = finalData.filter(r => r['FTTH Match'] === 'Changed').length;
+    const na   = finalData.filter(r => r['FTTH Match'] === 'Not avail').length;
+    const pct  = n => tot ? Math.round(n / tot * 100) + '%' : '—';
+    document.getElementById('s-total').textContent  = tot.toLocaleString();
+    document.getElementById('s-same').textContent   = same.toLocaleString();
+    document.getElementById('s-chg').textContent    = chg.toLocaleString();
+    document.getElementById('s-na').textContent     = na.toLocaleString();
+    document.getElementById('s-same-p').textContent = pct(same) + ' of total';
+    document.getElementById('s-chg-p').textContent  = pct(chg)  + ' of total';
+    document.getElementById('s-na-p').textContent   = pct(na)   + ' of total';
+}
+
+// ── FILTER & SEARCH ───────────────────────────────────
+document.querySelectorAll('.chip').forEach(c => {
+    c.addEventListener('click', () => {
+        document.querySelectorAll('.chip').forEach(x => x.classList.remove('active'));
+        c.classList.add('active');
+        activeFilter = c.dataset.f;
+        applyFilter();
+    });
+});
+document.getElementById('search-input').addEventListener('input', e => {
+    searchVal = e.target.value.toLowerCase();
+    applyFilter();
+});
+function applyFilter() {
+    filteredData = finalData.filter(row => {
+        if (activeFilter === 'same' && row['FTTH Match'] !== 'The same')   return false;
+        if (activeFilter === 'chg'  && row['FTTH Match'] !== 'Changed')    return false;
+        if (activeFilter === 'na'   && row['FTTH Match'] !== 'Not avail')  return false;
+        if (searchVal) return Object.values(row).some(v => String(v).toLowerCase().includes(searchVal));
+        return true;
+    });
+    if (sortCol !== null) doSort(false);
+    renderTable();
+}
+
+// ── SORT ──────────────────────────────────────────────
+function doSort(toggle = true) {
+    if (toggle) sortDir *= -1;
+    const key = headers[sortCol];
+    filteredData.sort((a, b) => String(a[key] || '').localeCompare(String(b[key] || '')) * sortDir);
+}
+
+// ── RENDER TABLE ──────────────────────────────────────
+function renderTable() {
+    const thead = document.getElementById('tbl-head');
+    const tbody = document.getElementById('tbl-body');
+
+    thead.innerHTML = '<tr>' + headers.map((h, i) => {
+        const cls = sortCol === i ? (sortDir === 1 ? 'sort-asc' : 'sort-desc') : '';
+        return `<th class="${cls}" data-i="${i}">${h} <span class="sort-arrow"></span></th>`;
+    }).join('') + '</tr>';
+
+    thead.querySelectorAll('th').forEach(th => {
+        th.addEventListener('click', () => { sortCol = +th.dataset.i; doSort(true); renderTable(); });
+    });
+
+    const slice = filteredData.slice(0, PREVIEW);
+    const frag  = document.createDocumentFragment();
+    slice.forEach(row => {
+        const tr = document.createElement('tr');
+        headers.forEach(h => {
+            const td = document.createElement('td');
+            const v  = row[h] !== undefined ? String(row[h]) : '';
+            if (h === 'FTTH Match' || h === 'DSLMatch') {
+                if      (v === 'The same')  td.innerHTML = '<span class="badge-same">✔ The same</span>';
+                else if (v === 'Changed')   td.innerHTML = '<span class="badge-chg">⚡ Changed</span>';
+                else if (v === 'Not avail') td.innerHTML = '<span class="badge-na">✕ Not avail</span>';
+                else td.textContent = v;
+            } else {
+                td.textContent = v;
+            }
+            tr.appendChild(td);
+        });
+        frag.appendChild(tr);
+    });
+    tbody.innerHTML = '';
+    tbody.appendChild(frag);
+
+    document.getElementById('footer-count').textContent =
+        'Showing ' + Math.min(slice.length, PREVIEW).toLocaleString() + ' of ' + filteredData.length.toLocaleString() + ' rows';
+    document.getElementById('footer-note').textContent =
+        filteredData.length > PREVIEW ? 'Preview limited to ' + PREVIEW + ' rows — export Excel for full data' : '';
+}
+
+// ── EXPORT ────────────────────────────────────────────
+document.getElementById('btn-export').addEventListener('click', async () => {
+    if (!finalData.length) return;
+    setAllBtns(true);
+    setProgress(10, 'Building Excel file…');
+    showOverlay();
+    try {
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('Cross-Match Report');
+        ws.columns = headers.map(h => ({ header: h, key: h, width: 22 }));
+        setProgress(30, 'Writing rows…'); await tick();
+        ws.addRows(finalData);
+        setProgress(60, 'Applying styles…'); await tick();
+
+        ws.getRow(1).eachCell(cell => {
+            cell.font      = { bold: true, color: { argb: 'FFFFFFFF' } };
+            cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A192F' } };
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        });
+
+        const ftthCol = headers.indexOf('FTTH Match') + 1;
+        const dslCol  = headers.indexOf('DSLMatch')   + 1;
+        ws.eachRow((row, rn) => {
+            if (rn === 1) return;
+            [ftthCol, dslCol].forEach(ci => {
+                if (!ci) return;
+                const cell = row.getCell(ci);
+                if      (cell.value === 'The same')  { cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFD1FAE5' } }; cell.font = { color:{ argb:'FF065F46' }, bold:true }; }
+                else if (cell.value === 'Changed')   { cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF3C7' } }; cell.font = { color:{ argb:'FF92400E' }, bold:true }; }
+                else if (cell.value === 'Not avail') { cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEE2E2' } }; cell.font = { color:{ argb:'FF991B1B' }, bold:true }; }
+            });
+        });
+
+        setProgress(90, 'Generating file…'); await tick();
+        const buf = await wb.xlsx.writeBuffer();
+        saveAs(new Blob([buf]), 'Samira_CrossMatch_Output.xlsx');
+        setProgress(100, 'Done!');
+        setTimeout(hideOverlay, 400);
+    } catch (err) {
+        hideOverlay();
+        alert('Export failed: ' + err.message);
+    } finally {
+        setAllBtns(false);
+    }
+});
+
+// ── HELPERS ───────────────────────────────────────────
+function showOverlay() { document.getElementById('overlay').classList.add('show'); }
+function hideOverlay() { document.getElementById('overlay').classList.remove('show'); }
+
+function setProgress(pct, msg) {
+    document.getElementById('prog-bar').style.width = pct + '%';
+    document.getElementById('prog-pct').textContent = pct + '%';
+    if (msg) document.getElementById('overlay-txt').textContent = msg;
+}
+
+function setAllBtns(disabled) {
+    ['btn-run','btn-refresh','btn-export','btn-reset'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = disabled;
+    });
+}
+
+function tick() { return new Promise(r => setTimeout(r, 0)); }
+
+function fmtBytes(b) {
+    return b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576).toFixed(1) + ' MB';
+}
+</script>
 </body>
 </html>
