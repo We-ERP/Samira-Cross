@@ -80,7 +80,7 @@ html,body{min-height:100%;font-family:'Inter',sans-serif;background:var(--surfac
 .btn-reset:hover:not(:disabled){background:#fff1f2}
 
 /* STATS */
-.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:24px}
 .stat-card{background:var(--card);border-radius:12px;padding:18px 20px;
            border-left:4px solid transparent;transition:transform .15s}
 .stat-card:hover{transform:translateY(-2px)}
@@ -213,19 +213,34 @@ td{padding:10px 16px;border-bottom:1px solid #f1f5f9;color:var(--text)}
       <div class="stat-lbl">Total Rows Processed</div>
     </div>
     <div class="stat-card same">
-      <div class="stat-num" id="s-same">0</div>
+      <div class="stat-num" id="s-ftth-same">0</div>
       <div class="stat-lbl">The Same (FTTH)</div>
-      <div class="stat-pct" id="s-same-p"></div>
+      <div class="stat-pct" id="s-ftth-same-p"></div>
     </div>
     <div class="stat-card changed">
-      <div class="stat-num" id="s-chg">0</div>
+      <div class="stat-num" id="s-ftth-chg">0</div>
       <div class="stat-lbl">Changed (FTTH)</div>
-      <div class="stat-pct" id="s-chg-p"></div>
+      <div class="stat-pct" id="s-ftth-chg-p"></div>
     </div>
     <div class="stat-card na">
-      <div class="stat-num" id="s-na">0</div>
+      <div class="stat-num" id="s-ftth-na">0</div>
       <div class="stat-lbl">Not Available (FTTH)</div>
-      <div class="stat-pct" id="s-na-p"></div>
+      <div class="stat-pct" id="s-ftth-na-p"></div>
+    </div>
+    <div class="stat-card same">
+      <div class="stat-num" id="s-dsl-same">0</div>
+      <div class="stat-lbl">The Same (DSL)</div>
+      <div class="stat-pct" id="s-dsl-same-p"></div>
+    </div>
+    <div class="stat-card changed">
+      <div class="stat-num" id="s-dsl-chg">0</div>
+      <div class="stat-lbl">Changed (DSL)</div>
+      <div class="stat-pct" id="s-dsl-chg-p"></div>
+    </div>
+    <div class="stat-card na">
+      <div class="stat-num" id="s-dsl-na">0</div>
+      <div class="stat-lbl">Not Available (DSL)</div>
+      <div class="stat-pct" id="s-dsl-na-p"></div>
     </div>
   </div>
 
@@ -316,10 +331,9 @@ function loadFile(file, type) {
         setTimeout(() => {
             try {
                 const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
-                const ws = wb.Sheets[wb.SheetNames[0]];
                 setProgress(85, 'Converting rows…');
                 setTimeout(() => {
-                    const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+                    const json = parseWorkbookSmart(wb);
                     const badge = document.getElementById(type + '-status');
                     badge.innerHTML = '<span class="dot"></span> ' + json.length.toLocaleString() + ' rows';
                     badge.classList.add('ok');
@@ -329,6 +343,13 @@ function loadFile(file, type) {
                     if (type === 'ir')   irData   = json;
                     setProgress(100, 'Done!');
                     setTimeout(hideOverlay, 400);
+                    if (json.length === 0) {
+                        alert(
+                            'تحذير: تم قراءة ملف ' + type.toUpperCase() + ' لكن لم يتم العثور على أي صفوف بيانات.\n' +
+                            'الشيتات الموجودة في الملف: ' + wb.SheetNames.join(', ') + '\n' +
+                            'تأكد إن البيانات مش فاضية وإن فيه صف عناوين (headers) واضح.'
+                        );
+                    }
                 }, 30);
             } catch (err) {
                 hideOverlay();
@@ -345,6 +366,55 @@ function loadFile(file, type) {
 function cleanServiceNumber(val) {
     if (!val) return '';
     return String(val).toUpperCase().replace(/FBB/g, '').replace(/FV/g, '').trim();
+}
+
+// ── FLEXIBLE COLUMN LOOKUP ─────────────────────────────
+// Excel headers are rarely 100% consistent (spaces vs underscores, case,
+// extra whitespace). This looks a value up by trying a list of candidate
+// header names, ignoring case/spaces/underscores.
+function getField(row, candidates) {
+    if (!row) return '';
+    const keys = Object.keys(row);
+    for (const cand of candidates) {
+        const target = cand.replace(/[\s_]+/g, '').toLowerCase();
+        const foundKey = keys.find(k => k.replace(/[\s_]+/g, '').toLowerCase() === target);
+        if (foundKey !== undefined) return row[foundKey];
+    }
+    return '';
+}
+
+// Normalize text for comparison: trim, lowercase, collapse internal whitespace.
+function normalizeText(val) {
+    return String(val || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// ── SMART WORKBOOK PARSING ─────────────────────────────
+// Some exports (especially large FTTH files) put the real data on a sheet
+// other than the first one, or add title/blank rows above the header row.
+// Instead of blindly trusting wb.SheetNames[0], scan every sheet, auto-detect
+// where its header row actually starts, and keep whichever sheet yields the
+// most data rows.
+function parseWorkbookSmart(workbook) {
+    let best = [];
+    for (const sheetName of workbook.SheetNames) {
+        const ws = workbook.Sheets[sheetName];
+        if (!ws) continue;
+
+        // Read as raw arrays first, so we can find the header row even if
+        // there are title/blank rows above it.
+        const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: false });
+        if (!raw.length) continue;
+
+        let headerRowIdx = 0;
+        for (let i = 0; i < Math.min(raw.length, 20); i++) {
+            const nonEmpty = raw[i].filter(c => String(c).trim() !== '');
+            if (nonEmpty.length >= 2) { headerRowIdx = i; break; }
+        }
+
+        const json = XLSX.utils.sheet_to_json(ws, { defval: '', range: headerRowIdx });
+        if (json.length > best.length) best = json;
+    }
+    return best;
 }
 
 // ── RUN CROSS-MATCH ───────────────────────────────────
@@ -365,12 +435,13 @@ async function runMatch() {
     // Build O(1) Maps using Service Number
     const dslMap  = new Map();
     const ftthMap = new Map();
+    const SERVICE_NUMBER_CANDIDATES = ['Service Number', 'ServiceNumber', 'service_number'];
     dslData.forEach(row => {
-        const num = cleanServiceNumber(row['Service Number']);
+        const num = cleanServiceNumber(getField(row, SERVICE_NUMBER_CANDIDATES));
         if (num) dslMap.set(num, row);
     });
     ftthData.forEach(row => {
-        const num = cleanServiceNumber(row['Service Number']);
+        const num = cleanServiceNumber(getField(row, SERVICE_NUMBER_CANDIDATES));
         if (num) ftthMap.set(num, row);
     });
 
@@ -384,28 +455,31 @@ async function runMatch() {
     for (let i = 0; i < total; i += CHUNK_SZ) {
         irData.slice(i, i + CHUNK_SZ).forEach(irRow => {
             const newRow = { ...irRow };
-            const irNum = cleanServiceNumber(irRow['dsl_number']);
-            const irCategory = String(irRow['case_sub_type'] || '').trim().toLowerCase();
+            const irNum = cleanServiceNumber(getField(irRow, ['dsl_number', 'DSL Number', 'dslNumber']));
+            // BUG FIX: this used to compare against 'case_sub_type', a totally
+            // different IR column, which is why rows with identical-looking
+            // "current_activity" text still showed as "Changed". The value we
+            // actually need to compare against DSL/FTTH's "Current Activity" is
+            // IR's own 'current_activity' column.
+            const irCategory = normalizeText(getField(irRow, ['current_activity', 'Current Activity', 'case_sub_type']));
 
             // ── DSL MATCH ──
-            // FIX: use 'Current Activity' column (not 'Service Name')
             const dslRow = dslMap.get(irNum);
             if (dslRow) {
-                const dslActivity = String(dslRow['Current Activity'] || '').trim();
+                const dslActivity = String(getField(dslRow, ['Current Activity', 'current_activity']) || '').trim();
                 newRow['Current Activity Dsl'] = dslActivity;
-                newRow['DSLMatch'] = (irCategory === dslActivity.toLowerCase()) ? 'The same' : 'Changed';
+                newRow['DSLMatch'] = (irCategory === normalizeText(dslActivity)) ? 'The same' : 'Changed';
             } else {
                 newRow['Current Activity Dsl'] = 'Not avail';
                 newRow['DSLMatch'] = 'Not avail';
             }
 
             // ── FTTH MATCH ──
-            // FIX: use 'Current Activity' column (not 'Service Name')
             const ftthRow = ftthMap.get(irNum);
             if (ftthRow) {
-                const ftthActivity = String(ftthRow['Current Activity'] || '').trim();
+                const ftthActivity = String(getField(ftthRow, ['Current Activity', 'current_activity']) || '').trim();
                 newRow['Current Activity FTTH'] = ftthActivity;
-                newRow['FTTH Match'] = (irCategory === ftthActivity.toLowerCase()) ? 'The same' : 'Changed';
+                newRow['FTTH Match'] = (irCategory === normalizeText(ftthActivity)) ? 'The same' : 'Changed';
             } else {
                 newRow['Current Activity FTTH'] = 'Not avail';
                 newRow['FTTH Match'] = 'Not avail';
@@ -471,18 +545,32 @@ document.getElementById('btn-reset').addEventListener('click', () => {
 
 // ── STATS ─────────────────────────────────────────────
 function updateStats() {
-    const tot  = finalData.length;
-    const same = finalData.filter(r => r['FTTH Match'] === 'The same').length;
-    const chg  = finalData.filter(r => r['FTTH Match'] === 'Changed').length;
-    const na   = finalData.filter(r => r['FTTH Match'] === 'Not avail').length;
-    const pct  = n => tot ? Math.round(n / tot * 100) + '%' : '—';
-    document.getElementById('s-total').textContent  = tot.toLocaleString();
-    document.getElementById('s-same').textContent   = same.toLocaleString();
-    document.getElementById('s-chg').textContent    = chg.toLocaleString();
-    document.getElementById('s-na').textContent     = na.toLocaleString();
-    document.getElementById('s-same-p').textContent = pct(same) + ' of total';
-    document.getElementById('s-chg-p').textContent  = pct(chg)  + ' of total';
-    document.getElementById('s-na-p').textContent   = pct(na)   + ' of total';
+    const tot = finalData.length;
+    const pct = n => tot ? Math.round(n / tot * 100) + '%' : '—';
+
+    const ftthSame = finalData.filter(r => r['FTTH Match'] === 'The same').length;
+    const ftthChg  = finalData.filter(r => r['FTTH Match'] === 'Changed').length;
+    const ftthNa   = finalData.filter(r => r['FTTH Match'] === 'Not avail').length;
+
+    const dslSame = finalData.filter(r => r['DSLMatch'] === 'The same').length;
+    const dslChg  = finalData.filter(r => r['DSLMatch'] === 'Changed').length;
+    const dslNa   = finalData.filter(r => r['DSLMatch'] === 'Not avail').length;
+
+    document.getElementById('s-total').textContent = tot.toLocaleString();
+
+    document.getElementById('s-ftth-same').textContent   = ftthSame.toLocaleString();
+    document.getElementById('s-ftth-chg').textContent    = ftthChg.toLocaleString();
+    document.getElementById('s-ftth-na').textContent     = ftthNa.toLocaleString();
+    document.getElementById('s-ftth-same-p').textContent = pct(ftthSame) + ' of total';
+    document.getElementById('s-ftth-chg-p').textContent  = pct(ftthChg)  + ' of total';
+    document.getElementById('s-ftth-na-p').textContent   = pct(ftthNa)   + ' of total';
+
+    document.getElementById('s-dsl-same').textContent   = dslSame.toLocaleString();
+    document.getElementById('s-dsl-chg').textContent    = dslChg.toLocaleString();
+    document.getElementById('s-dsl-na').textContent     = dslNa.toLocaleString();
+    document.getElementById('s-dsl-same-p').textContent = pct(dslSame) + ' of total';
+    document.getElementById('s-dsl-chg-p').textContent  = pct(dslChg)  + ' of total';
+    document.getElementById('s-dsl-na-p').textContent   = pct(dslNa)   + ' of total';
 }
 
 // ── FILTER & SEARCH ───────────────────────────────────
