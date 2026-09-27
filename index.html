@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Samira Cross-Match</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- مكتبة لقراءة ملفات الإكسيل بسرعة -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- مكتبة لتصدير الإكسيل مع الألوان والتنسيقات -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Samira Cross-Match</h1>
+            <p>Advanced Data Cross-Referencing System (FTTH, DSL, IR)</p>
+        </header>
+        
+        <div class="upload-section">
+            <!-- Upload FTTH -->
+            <div class="file-box">
+                <label>1. Upload FTTH Sheet</label>
+                <div class="input-wrapper">
+                    <input type="file" id="file-ftth" accept=".xlsx, .xls, .csv">
+                </div>
+                <span id="ftth-status" class="status-badge">Pending...</span>
+            </div>
+            
+            <!-- Upload DSL -->
+            <div class="file-box">
+                <label>2. Upload DSL Sheet</label>
+                <div class="input-wrapper">
+                    <input type="file" id="file-dsl" accept=".xlsx, .xls, .csv">
+                </div>
+                <span id="dsl-status" class="status-badge">Pending...</span>
+            </div>
+            
+            <!-- Upload IR -->
+            <div class="file-box">
+                <label>3. Upload IR Sheet (Base)</label>
+                <div class="input-wrapper">
+                    <input type="file" id="file-ir" accept=".xlsx, .xls, .csv">
+                </div>
+                <span id="ir-status" class="status-badge">Pending...</span>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button id="btn-run" class="btn-3d">Run Cross-Match</button>
+            <button id="btn-export" class="btn-3d btn-export" style="display:none;">Export to Excel</button>
+        </div>
+
+        <div class="table-container">
+            <div id="render-msg" style="display: none; color:#0A192F; font-weight:bold; margin-bottom:10px;"></div>
+            <table id="result-table">
+                <thead></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>
