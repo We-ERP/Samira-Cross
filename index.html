@@ -154,6 +154,19 @@ td{padding:10px 16px;border-bottom:1px solid #f1f5f9;color:var(--text)}
           transition:width .25s ease;width:0%}
 .prog-pct{color:var(--teal);font-size:13px;font-weight:700;letter-spacing:.5px}
 
+/* ── WARNING MODAL (in-page, replaces native alert()) ─── */
+.warn-overlay{position:fixed;inset:0;background:rgba(10,25,47,.75);z-index:10000;
+  display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.warn-overlay.show{display:flex}
+.warn-box{background:var(--card);border-radius:16px;padding:34px 38px;max-width:480px;
+  width:90%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.35);border-top:4px solid #f59e0b;
+  animation:warn-pop .18s ease}
+@keyframes warn-pop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+.warn-icon{font-size:38px;margin-bottom:10px}
+.warn-title{font-weight:800;font-size:17px;color:var(--text);margin-bottom:10px}
+.warn-msg{font-size:13.5px;color:var(--muted);line-height:1.8;white-space:pre-line;text-align:right;direction:rtl}
+.warn-box .btn{margin-top:22px;padding:11px 34px}
+
 @media(max-width:800px){
   .upload-grid{grid-template-columns:1fr}
   .stats-grid{grid-template-columns:repeat(2,1fr)}
@@ -286,6 +299,16 @@ td{padding:10px 16px;border-bottom:1px solid #f1f5f9;color:var(--text)}
   <div class="prog-pct" id="prog-pct">0%</div>
 </div>
 
+<!-- WARNING MODAL -->
+<div class="warn-overlay" id="warn-overlay">
+  <div class="warn-box">
+    <div class="warn-icon">⚠️</div>
+    <div class="warn-title" id="warn-title"></div>
+    <div class="warn-msg" id="warn-msg"></div>
+    <button class="btn btn-run" id="warn-ok">حسنًا</button>
+  </div>
+</div>
+
 <script>
 // ── STATE ─────────────────────────────────────────────
 let ftthData = null, dslData = null, irData = null;
@@ -333,7 +356,7 @@ function loadFile(file, type) {
                 const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
                 setProgress(85, 'Converting rows…');
                 setTimeout(() => {
-                    const json = parseWorkbookSmart(wb);
+                    const { rows: json, diagnostics } = parseWorkbookSmart(wb);
                     const badge = document.getElementById(type + '-status');
                     badge.innerHTML = '<span class="dot"></span> ' + json.length.toLocaleString() + ' rows';
                     badge.classList.add('ok');
@@ -344,21 +367,22 @@ function loadFile(file, type) {
                     setProgress(100, 'Done!');
                     setTimeout(hideOverlay, 400);
                     if (json.length === 0) {
-                        alert(
-                            'تحذير: تم قراءة ملف ' + type.toUpperCase() + ' لكن لم يتم العثور على أي صفوف بيانات.\n' +
-                            'الشيتات الموجودة في الملف: ' + wb.SheetNames.join(', ') + '\n' +
-                            'تأكد إن البيانات مش فاضية وإن فيه صف عناوين (headers) واضح.'
+                        const details = diagnostics.map(d => '• ' + d.sheetName + ': ' + d.rows + ' صف').join('\n');
+                        showWarning(
+                            'تم قراءة الملف لكن لم يتم العثور على أي صفوف بيانات',
+                            'ملف ' + type.toUpperCase() + ' يحتوي على الشيتات التالية:\n' + details +
+                            '\n\nتأكد إن فيه صف عناوين (headers) واضح وإن البيانات مش فاضية، ثم أعد رفع الملف.'
                         );
                     }
                 }, 30);
             } catch (err) {
                 hideOverlay();
-                alert('Error reading file: ' + err.message);
+                showWarning('حدث خطأ أثناء قراءة الملف', err.message);
             }
         }, 50);
     };
 
-    reader.onerror = () => { hideOverlay(); alert('Failed to read file.'); };
+    reader.onerror = () => { hideOverlay(); showWarning('فشلت قراءة الملف', 'تعذر قراءة الملف من القرص. جرّب رفعه مرة أخرى.'); };
     reader.readAsArrayBuffer(file);
 }
 
@@ -391,30 +415,41 @@ function normalizeText(val) {
 // ── SMART WORKBOOK PARSING ─────────────────────────────
 // Some exports (especially large FTTH files) put the real data on a sheet
 // other than the first one, or add title/blank rows above the header row.
-// Instead of blindly trusting wb.SheetNames[0], scan every sheet, auto-detect
-// where its header row actually starts, and keep whichever sheet yields the
-// most data rows.
+// Instead of blindly trusting wb.SheetNames[0], scan every sheet and keep
+// whichever yields the most data rows, with a fallback for sheets whose
+// header row isn't the very first row.
 function parseWorkbookSmart(workbook) {
     let best = [];
+    const diagnostics = []; // { sheetName, rows } for every sheet we tried
+
     for (const sheetName of workbook.SheetNames) {
         const ws = workbook.Sheets[sheetName];
-        if (!ws) continue;
+        if (!ws) { diagnostics.push({ sheetName, rows: 0 }); continue; }
 
-        // Read as raw arrays first, so we can find the header row even if
-        // there are title/blank rows above it.
-        const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: false });
-        if (!raw.length) continue;
+        // Tier 1: plain parse, identical to the method that already works
+        // for the DSL/IR sheets — try this first on every sheet.
+        let json = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
-        let headerRowIdx = 0;
-        for (let i = 0; i < Math.min(raw.length, 20); i++) {
-            const nonEmpty = raw[i].filter(c => String(c).trim() !== '');
-            if (nonEmpty.length >= 2) { headerRowIdx = i; break; }
+        // Tier 2: if that gave nothing, there may be title/blank rows above
+        // the real header row — scan for it (indices kept aligned with the
+        // real sheet by NOT filtering blank rows out beforehand).
+        if (!json.length) {
+            const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+            let headerRowIdx = -1;
+            for (let i = 0; i < Math.min(raw.length, 25); i++) {
+                const nonEmpty = (raw[i] || []).filter(c => String(c).trim() !== '');
+                if (nonEmpty.length >= 2) { headerRowIdx = i; break; }
+            }
+            if (headerRowIdx > 0) {
+                json = XLSX.utils.sheet_to_json(ws, { defval: '', range: headerRowIdx });
+            }
         }
 
-        const json = XLSX.utils.sheet_to_json(ws, { defval: '', range: headerRowIdx });
+        diagnostics.push({ sheetName, rows: json.length });
         if (json.length > best.length) best = json;
     }
-    return best;
+
+    return { rows: best, diagnostics };
 }
 
 // ── RUN CROSS-MATCH ───────────────────────────────────
@@ -423,7 +458,7 @@ document.getElementById('btn-refresh').addEventListener('click', runMatch);
 
 async function runMatch() {
     if (!ftthData || !dslData || !irData) {
-        alert('Please upload all 3 sheets (FTTH, DSL, IR) before running.');
+        showWarning('البيانات غير مكتملة', 'لازم ترفع الثلاث شيتات (FTTH, DSL, IR) الأول قبل ما تشغّل المقارنة.');
         return;
     }
 
@@ -687,7 +722,7 @@ document.getElementById('btn-export').addEventListener('click', async () => {
         setTimeout(hideOverlay, 400);
     } catch (err) {
         hideOverlay();
-        alert('Export failed: ' + err.message);
+        showWarning('فشل التصدير', err.message);
     } finally {
         setAllBtns(false);
     }
@@ -696,6 +731,16 @@ document.getElementById('btn-export').addEventListener('click', async () => {
 // ── HELPERS ───────────────────────────────────────────
 function showOverlay() { document.getElementById('overlay').classList.add('show'); }
 function hideOverlay() { document.getElementById('overlay').classList.remove('show'); }
+
+// Professional in-page warning modal — replaces native alert() popups.
+function showWarning(title, msg) {
+    document.getElementById('warn-title').textContent = title;
+    document.getElementById('warn-msg').textContent = msg;
+    document.getElementById('warn-overlay').classList.add('show');
+}
+document.getElementById('warn-ok').addEventListener('click', () => {
+    document.getElementById('warn-overlay').classList.remove('show');
+});
 
 function setProgress(pct, msg) {
     document.getElementById('prog-bar').style.width = pct + '%';
