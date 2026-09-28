@@ -367,7 +367,7 @@ function loadFile(file, type) {
                     setTimeout(hideOverlay, 400);
                     if (json.length === 0) {
                         const details = diagnostics.map(d =>
-                            '• ' + d.sheetName + ': ' + d.rows + ' صف (خلايا خام: ' + d.cellCount + ')'
+                            '• ' + d.sheetName + ': ' + d.rows + ' صف (خلايا خام: ' + (d.cellCount === null ? 'تعذر الحساب' : d.cellCount) + ')'
                         ).join('\n');
                         const allTrulyEmpty = diagnostics.every(d => d.cellCount === 0);
                         const explanation = allTrulyEmpty
@@ -424,7 +424,8 @@ function normalizeText(val) {
 // reader even though the cells are actually there.
 function fixSheetRange(ws) {
     let minR = Infinity, minC = Infinity, maxR = -Infinity, maxC = -Infinity, cellCount = 0;
-    for (const addr in ws) {
+    const keys = Object.keys(ws);
+    for (const addr of keys) {
         if (addr[0] === '!') continue;
         cellCount++;
         const cell = XLSX.utils.decode_cell(addr);
@@ -447,12 +448,10 @@ function parseWorkbookSmart(workbook) {
         const ws = workbook.Sheets[sheetName];
         if (!ws) { diagnostics.push({ sheetName, rows: 0, cellCount: 0 }); continue; }
 
-        // Recompute the real used range from actual cell addresses, in case
-        // the declared '!ref' is wrong or missing.
-        const cellCount = fixSheetRange(ws);
-
         // Tier 1: plain parse, identical to the method that already works
-        // for the DSL/IR sheets — try this first on every sheet.
+        // for the DSL/IR sheets — try this first on every sheet. For normal,
+        // well-formed sheets (even with a million rows) this succeeds
+        // immediately and none of the fallbacks below ever run.
         let json = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
         // Tier 2: if that gave nothing, there may be title/blank rows above
@@ -467,6 +466,23 @@ function parseWorkbookSmart(workbook) {
             }
             if (headerRowIdx > 0) {
                 json = XLSX.utils.sheet_to_json(ws, { defval: '', range: headerRowIdx });
+            }
+        }
+
+        // Tier 3 (last resort, diagnostics only): still nothing? The
+        // declared '!ref' dimension might be wrong. Only NOW pay the cost of
+        // walking every cell key to recompute the real range — this only
+        // ever runs for sheets that are already empty by the cheap checks
+        // above, never for large, well-formed sheets.
+        let cellCount = null;
+        if (!json.length) {
+            try {
+                cellCount = fixSheetRange(ws);
+                if (cellCount) {
+                    json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+                }
+            } catch (e) {
+                cellCount = null; // couldn't determine — leave as unknown, don't crash the load
             }
         }
 
