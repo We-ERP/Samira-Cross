@@ -164,7 +164,7 @@ td{padding:10px 16px;border-bottom:1px solid #f1f5f9;color:var(--text)}
 @keyframes warn-pop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
 .warn-icon{font-size:38px;margin-bottom:10px}
 .warn-title{font-weight:800;font-size:17px;color:var(--text);margin-bottom:10px}
-.warn-msg{font-size:13.5px;color:var(--muted);line-height:1.8;white-space:pre-line;text-align:right;direction:rtl}
+.warn-msg{font-size:13.5px;color:var(--muted);line-height:1.8;white-space:pre-line;text-align:right;direction:rtl;max-height:50vh;overflow-y:auto}
 .warn-box .btn{margin-top:22px;padding:11px 34px}
 
 @media(max-width:800px){
@@ -353,7 +353,8 @@ function loadFile(file, type) {
         // Yield so browser can paint the progress update before XLSX.read blocks
         setTimeout(() => {
             try {
-                const { rows: json, diagnostics } = readWorkbookRobust(e.target.result);
+                const result = readWorkbookRobust(e.target.result);
+                const json = result.rows, diagnostics = result.diagnostics;
                 setProgress(85, 'Converting rows…');
                 setTimeout(() => {
                     const badge = document.getElementById(type + '-status');
@@ -373,15 +374,25 @@ function loadFile(file, type) {
                         const explanation = allTrulyEmpty
                             ? '\n\nالشيتات دي فاضية تمامًا من أي خلايا (0 خلية خام) — الملف نفسه مش فيه بيانات ثابتة. لو الشيت ده متولّد من Power Query أو Pivot أو مصدر بيانات خارجي، جرب تعمل "Copy → Paste as Values" وتحفظ نسخة جديدة، وبعدين ارفعها.'
                             : '\n\nفيه خلايا في الملف لكن مش قادر يتعرف على صف عناوين واضح فيها. تأكد إن أول صف بيانات فيه أسماء الأعمدة (Service Number, Service Name...) من غير صفوف عنوان/دمج فوقه.';
+                        const sig = bufferSignatureHex(e.target.result);
+                        const techInfo = '\n\n— بيانات تقنية للتشخيص —\n' +
+                            'حجم الملف: ' + fmtBytes(file.size) + '\n' +
+                            'أول 8 بايت (hex): ' + sig + '\n' +
+                            'طريقة القراءة التي نجحت فنيًا: ' + (result.mode === 'binary' ? 'ملف إكسل ثنائي' : 'نص/HTML') +
+                            (result.binaryErrorMessage ? '\nخطأ القراءة الثنائية: ' + result.binaryErrorMessage : '');
                         showWarning(
                             'تم قراءة الملف لكن لم يتم العثور على أي صفوف بيانات',
-                            'ملف ' + type.toUpperCase() + ' يحتوي على الشيتات التالية:\n' + details + explanation
+                            'ملف ' + type.toUpperCase() + ' يحتوي على الشيتات التالية:\n' + details + explanation + techInfo
                         );
                     }
                 }, 30);
             } catch (err) {
                 hideOverlay();
-                showWarning('حدث خطأ أثناء قراءة الملف', err.message);
+                const sig = bufferSignatureHex(e.target.result);
+                showWarning(
+                    'حدث خطأ أثناء قراءة الملف',
+                    err.message + '\n\nحجم الملف: ' + fmtBytes(file.size) + '\nأول 8 بايت (hex): ' + sig
+                );
             }
         }, 50);
     };
@@ -499,11 +510,14 @@ function parseWorkbookSmart(workbook) {
 // exports are actually HTML tables or SpreadsheetML/CSV text saved with an
 // .xlsx/.xls extension (common with BI/reporting-tool exports) — retry by
 // decoding the bytes as text and letting SheetJS auto-detect that format.
+// Also reports which mode actually produced the result, and the binary
+// error if there was one, so we can show concrete facts instead of guesses.
 function readWorkbookRobust(buffer) {
     let binaryResult = null, binaryError = null;
     try {
         const wb = XLSX.read(new Uint8Array(buffer), { type: 'array' });
         binaryResult = parseWorkbookSmart(wb);
+        binaryResult.mode = 'binary';
     } catch (err) {
         binaryError = err;
     }
@@ -513,13 +527,24 @@ function readWorkbookRobust(buffer) {
         const text = new TextDecoder('utf-8').decode(buffer);
         const wb = XLSX.read(text, { type: 'string' });
         const textResult = parseWorkbookSmart(wb);
+        textResult.mode = 'text';
+        textResult.binaryErrorMessage = binaryError ? binaryError.message : null;
         if (textResult.rows.length) return textResult;
         // Neither mode found rows — prefer whichever diagnostics we have.
-        return binaryResult || textResult;
+        const fallback = binaryResult || textResult;
+        fallback.binaryErrorMessage = binaryError ? binaryError.message : null;
+        return fallback;
     } catch (err2) {
-        if (binaryResult) return binaryResult;
+        if (binaryResult) { binaryResult.binaryErrorMessage = binaryError ? binaryError.message : null; return binaryResult; }
         throw binaryError || err2;
     }
+}
+
+// First bytes of the file as hex, so we can tell a real .xlsx/.xls apart
+// from an HTML/XML/CSV file that was just renamed with an Excel extension.
+function bufferSignatureHex(buffer, len = 8) {
+    const bytes = new Uint8Array(buffer.slice(0, len));
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
 }
 
 // ── RUN CROSS-MATCH ───────────────────────────────────
